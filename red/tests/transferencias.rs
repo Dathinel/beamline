@@ -30,13 +30,17 @@ impl Drop for Carpeta {
 }
 
 async fn equipo(dir: &Path, alias: &str, tamano_max: u64) -> Equipo {
+    equipo_con(dir, alias, tamano_max, false).await
+}
+
+async fn equipo_con(dir: &Path, alias: &str, tamano_max: u64, mdns: bool) -> Equipo {
     Equipo::abrir(Config {
         identidad: iroh::SecretKey::generate(),
         alias: alias.into(),
         almacen: dir.join(format!("almacen-{alias}")),
         rele: Rele::Ninguno,
         solo_rele: false,
-        mdns: false,
+        mdns,
         tamano_max,
         inseguro: false,
         limpieza: Duration::from_secs(1),
@@ -524,6 +528,40 @@ async fn nadie_mas_puede_bajar_lo_ofrecido() {
         .unwrap();
     assert!(intentar().await.is_none(), "bajó la oferta de otro");
     esperar(&b, &mut vb, fin_de(o["oferta"].as_u64().unwrap())).await;
+    a.cerrar().await;
+    b.cerrar().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn los_cercanos_aparecen_con_su_alias_y_se_envia_por_clave() {
+    let c = Carpeta::nueva();
+    let a = equipo_con(&c.0, "ana", 1 << 40, true).await;
+    let b = equipo_con(&c.0, "beto con ñ", 1 << 40, true).await;
+    let (mut va, mut vb) = (Vec::new(), Vec::new());
+    let clave_b = b.clave().to_string();
+    let visto = esperar(&a, &mut va, |e| {
+        e["type"] == "cercano" && e["clave"] == clave_b
+    })
+    .await;
+    assert_eq!(visto["alias"], "beto con ñ");
+    assert_eq!(visto["visto"], true);
+    assert!(
+        a.estado()["cercanos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["clave"] == clave_b)
+    );
+
+    // Sin billete: solo con la clave, que mDNS ya resolvió a una dirección.
+    aleatorio(&c.0.join("x.bin"), 1000);
+    let e = a
+        .ofrecer(&clave_b, vec![(c.0.join("x.bin"), "x.bin".into())])
+        .unwrap();
+    let o = esperar(&b, &mut vb, tipo("oferta")).await;
+    b.responder(o["oferta"].as_u64().unwrap(), vec![0], Some(c.0.join("d")))
+        .unwrap();
+    assert_eq!(esperar(&a, &mut va, fin_de(e)).await["ok"], true);
     a.cerrar().await;
     b.cerrar().await;
 }
