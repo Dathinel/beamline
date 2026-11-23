@@ -1,0 +1,4 @@
+target/
+.entorno/
+bin/
+obj/
