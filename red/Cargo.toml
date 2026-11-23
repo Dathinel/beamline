@@ -1,0 +1,33 @@
+[package]
+name = "beamline-red"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+license = "MIT"
+description = "Red de BeamLine: iroh e iroh-blobs detrás del protocolo de módulos v1"
+publish = false
+
+[features]
+default = []
+prueba = ["iroh/test-utils"]
+
+[dependencies]
+dathinel-red = { path = "../Sala/red" }
+iroh = { version = "=1.4.1", default-features = false, features = ["portmapper", "tls-ring", "fast-apple-datapath"] }
+iroh-blobs = { version = "=0.105.0" }
+iroh-mdns-address-lookup = "=0.6.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "fs"] }
+tokio-util = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+base64 = "0.22"
+n0-future = "0.3"
+fs4 = { version = "0.13", features = ["tokio"] }
+
+[dev-dependencies]
+rand = "0.9"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
