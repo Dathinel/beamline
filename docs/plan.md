@@ -1,6 +1,6 @@
 # Plan: app de envío de archivos entre equipos (nombre por decidir)
 
-Estado: propuesta del 22-nov, **sin aprobar**. Al aprobarse, este archivo pasa a `<carpeta de la app>\docs\plan.md`.
+Estado: aprobado por Daniel el 22-nov (opción B, empezar por la fase 0). Nombre provisional: BeamLine.
 
 ## Qué es
 
