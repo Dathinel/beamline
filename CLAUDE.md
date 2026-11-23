@@ -122,4 +122,7 @@ Detalles que conviene saber:
    - **Distribución** (`build\distribuir.ps1`): zip de 30,8 MB; instalador Inno de 20,4 MB, probado en silencio (instalar, autoprueba y desinstalar); `catalogo-beamline.json` sin firmar; `.tar.gz` de Linux de 38 MB.
    - `cargo deny` en verde y `LICENCIAS.md` completo.
 
-   Para publicar falta lo que decide Daniel (`docs\legal.md`): nombre y marca, licencia, repositorio y firma del catálogo.
+   **Publicada el 23-nov:** https://github.com/Dathinel/beamline, con la release v0.1.0 como prerelease (instalador, zip, tar de Linux y SHA256SUMS).
+   - Daniel: nombre BeamLine, «Público ya», GPLv3 y «Sí, ahora» al catálogo.
+   - La entrada del catálogo (`dist\catalogo-beamline.json`) se la pasé a la sesión de Rodaje, que lleva `Dathinel/rodaje-catalogo` y la clave, para que la firme; falta su confirmación.
+   - Revisión de bloque de la fase 4 hecha por Sonnet (Gemini falló dos veces sin respuesta) y aplicada.
