@@ -29,11 +29,14 @@ En un solo PC, el punto 1 falla en un sentido (mDNS entre dos procesos); entre d
 ## Linux (fase 4)
 
 `build\app-linux.ps1 -Autoprueba` compila en Docker y deja `dist\BeamLine-<versión>-linux-x64.tar.gz`. La autoprueba pasa bajo Xvfb, y una captura (`dist\captura-linux.png`) muestra la ventana bien dibujada. Lo que Daniel tiene que probar con el USB de Linux:
-1. Descomprimir el `.tar.gz` y abrir `BeamLine-linux/beamline`. ¿Abre en menos de un segundo y se ve bien?
+1. Descomprimir el `.tar.gz` **en el home o en una partición ext4**: en exFAT o NTFS se pierde el permiso de ejecución y `beamline-red` no arranca. Abrir `BeamLine-linux/beamline`. ¿Abre en menos de un segundo y se ve bien?
 2. «Elegir archivos» y «Elegir carpeta» usan `zenity` (o `kdialog` en KDE): ¿salen, y se envía lo elegido?
 3. Con BeamLine abierto en Windows y en Linux, en la misma red, ¿se ven los dos? Enviar en los dos sentidos.
 4. Arrastrar archivos desde el gestor de archivos a la zona azul.
 5. «Mostrar» abre la carpeta con el gestor de archivos (`xdg-open`).
+6. El billete: «Copiar mi billete» en Linux y pegarlo en Windows, y al revés. Es la forma de llegar a un equipo de fuera, y en Linux el portapapeles solo lo probó la autoprueba de Rodaje.
+7. Ajustes (nombre, carpeta, relé, límite) y el clic derecho sobre un equipo («Guardar lo suyo sin preguntar»). La autoprueba no los abre.
+8. Sin zenity ni kdialog, «Elegir archivos» tiene que avisar de que falta. Recibir va a la carpeta de descargas del escritorio («Descargas» en español).
 
 Ya comprobado sin Daniel: Windows envía a Linux por un relé y la huella SHA-256 coincide (23-nov).
 

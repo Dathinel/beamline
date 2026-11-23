@@ -15,7 +15,7 @@ internal sealed class Guardado
 internal sealed class Ajustes
 {
     public string Alias { get; set; } = Environment.MachineName;
-    public string Carpeta { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "BeamLine");
+    public string Carpeta { get; set; } = Path.Combine(Plataforma.Descargas(), "BeamLine");
     /// <summary>«n0» (internet con el relé público), «ninguno» (solo directa) o una URL https de relé propio.</summary>
     public string Rele { get; set; } = "n0";
     /// <summary>Con relé propio: que todo vaya por él (oculta la IP a los demás).</summary>

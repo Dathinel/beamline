@@ -9,6 +9,9 @@ internal static partial class Plataforma
 {
     public static string Red => "beamline-red.exe";
 
+    public static string Descargas() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+
     public static void Colocar(Window v, bool fueraDePantalla)
     {
         v.AppWindow.Resize(new Windows.Graphics.SizeInt32(960, 640));

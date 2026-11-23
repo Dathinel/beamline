@@ -17,6 +17,7 @@ App de envío de archivos tipo LocalSend que también funciona por internet: iro
 - Entorno: `. build\entorno.ps1`. Por ahora usa el `.entorno` de la copia de trabajo de Sala.
 - Pruebas:
   - Rust: `cd red; cargo test` (y `--features prueba` para la del relé local); `cargo deny check`. Hay 41: 21 unitarias (`src\equipo\pruebas.rs` y el reparto de `grupo.rs`) y 20 de punta a punta (`tests\transferencias.rs` y `tests\grupo.rs`, que incluye un miembro hostil del grupo).
+  - Linux: `BeamLine.slnx` no incluye `BeamLine.App.Desktop`. Tras tocar `src\BeamLine.App`, hay que correr `build\app-linux.ps1 -Autoprueba` (Docker).
   - C#: `dotnet test BeamLine.slnx`. Hay 11, y 10 de ellas usan procesos reales.
   - No hay CI porque no hay remoto.
 

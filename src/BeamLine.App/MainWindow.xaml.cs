@@ -254,13 +254,32 @@ public sealed partial class MainWindow : Window
 
     private async void ElegirArchivos_Click(object sender, RoutedEventArgs e)
     {
-        IReadOnlyList<string> r = await Plataforma.ElegirArchivosAsync(this);
+        IReadOnlyList<string> r = await Elegir(() => Plataforma.ElegirArchivosAsync(this), []);
         if (r.Count > 0) await EnviarRutasAsync(r);
     }
 
     private async void ElegirCarpeta_Click(object sender, RoutedEventArgs e)
     {
-        if (await Plataforma.ElegirCarpetaAsync(this) is { } r) await EnviarRutasAsync([r]);
+        if (await Elegir(() => Plataforma.ElegirCarpetaAsync(this), null) is { } r) await EnviarRutasAsync([r]);
+    }
+
+    /// <summary>Un selector cada vez (en Linux no son modales) y, si no hay ninguno que abrir, se dice.</summary>
+    private async Task<T> Elegir<T>(Func<Task<T>> abrir, T nada)
+    {
+        ElegirArchivos.IsEnabled = ElegirCarpeta.IsEnabled = false;
+        try
+        {
+            return await abrir();
+        }
+        catch (InvalidOperationException ex)
+        {
+            Avisar(ex.Message, InfoBarSeverity.Warning);
+            return nada;
+        }
+        finally
+        {
+            ActualizarZona();
+        }
     }
 
     private List<(string A, string Alias)>? Objetivo()

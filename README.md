@@ -6,12 +6,13 @@ Envía archivos y carpetas de cualquier tamaño entre equipos, en la misma red o
 - **El otro decide qué acepta**, archivo por archivo. Los equipos de confianza pueden guardar sin preguntar.
 - **Si se corta, sigue donde iba.** No pisa nada: si un nombre ya existe con otro contenido, guarda «nombre (2)».
 - **A varios a la vez** (hasta 8): los receptores se reparten el trabajo y el que envía sube cada byte una sola vez.
+- **La primera vez**, Windows pide permiso en el cortafuegos: hay que aceptarlo en redes privadas para que te vean los de tu red.
 - **Sin pasar archivos por servidores ajenos:** con el relé público de n0 solo hay conexión directa. Para internet sin conexión directa se puede poner un relé propio.
 
 ## Cómo se ejecuta
 
 Windows (WinUI 3, Native AOT): `build\app.ps1` publica en `dist\BeamLine` y `build\distribuir.ps1` hace el zip, el instalador y la entrada del catálogo.
-Linux (Uno sobre X11, Native AOT): `build\app-linux.ps1 -Autoprueba` compila y prueba en un contenedor de Docker, y deja `dist\BeamLine-<versión>-linux-x64.tar.gz`.
+Linux (Uno sobre X11, Native AOT; glibc 2.34 o más nuevo, como Ubuntu 22.04 o Debian 12; en Wayland, por XWayland): `build\app-linux.ps1 -Autoprueba` compila y prueba en un contenedor de Docker, y deja `dist\BeamLine-<versión>-linux-x64.tar.gz`.
 
 ```powershell
 . build\entorno.ps1

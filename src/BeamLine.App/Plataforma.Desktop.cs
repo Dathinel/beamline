@@ -15,15 +15,21 @@ internal static partial class Plataforma
 
     public static async Task<IReadOnlyList<string>> ElegirArchivosAsync(Window v)
     {
+        string inicio = Inicio();
         string? r = await DialogoAsync(
-            ["--file-selection", "--multiple", "--separator=\n", "--title=Elegir archivos"],
-            ["--getopenfilename", ".", "--multiple", "--separate-output", "--title", "Elegir archivos"]);
-        return r is null ? [] : [.. r.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+            ["--file-selection", "--multiple", "--separator=\n", "--title=Elegir archivos", "--filename=" + inicio + "/"],
+            ["--getopenfilename", inicio, "--multiple", "--separate-output", "--title", "Elegir archivos"]);
+        // Sin recortar espacios: un nombre puede acabar en espacio. shortcut: un nombre con salto de línea se parte en dos.
+        return r is null ? [] : [.. r.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(x => x.TrimEnd('\r'))];
     }
 
-    public static async Task<string?> ElegirCarpetaAsync(Window v) =>
-        (await DialogoAsync(["--file-selection", "--directory", "--title=Elegir carpeta"],
-            ["--getexistingdirectory", ".", "--title", "Elegir carpeta"]))?.Trim() is { Length: > 0 } c ? c : null;
+    public static async Task<string?> ElegirCarpetaAsync(Window v)
+    {
+        string inicio = Inicio();
+        string? r = await DialogoAsync(["--file-selection", "--directory", "--title=Elegir carpeta", "--filename=" + inicio + "/"],
+            ["--getexistingdirectory", inicio, "--title", "Elegir carpeta"]);
+        return r?.TrimEnd('\n', '\r') is { Length: > 0 } c ? c : null;
+    }
 
     /// <summary>Abre la carpeta del archivo con el gestor de archivos del escritorio.</summary>
     public static void Mostrar(string ruta)
@@ -37,12 +43,37 @@ internal static partial class Plataforma
     {
     }
 
-    /// <summary>zenity o, si no está, kdialog. Null si se cancela o no hay ninguno.</summary>
+    /// <summary>La carpeta de descargas del escritorio (XDG, «Descargas» en español) o, si no se sabe, la del perfil.</summary>
+    public static string Descargas()
+    {
+        string casa = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        try
+        {
+            string archivo = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "user-dirs.dirs");
+            foreach (string l in File.Exists(archivo) ? File.ReadLines(archivo) : [])
+            {
+                if (!l.StartsWith("XDG_DOWNLOAD_DIR=", StringComparison.Ordinal)) continue;
+                string d = l["XDG_DOWNLOAD_DIR=".Length..].Trim('"').Replace("$HOME", casa, StringComparison.Ordinal);
+                if (Path.IsPathRooted(d)) return d;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+        return Path.Combine(casa, "Downloads");
+    }
+
+    private static string Inicio() => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+    /// <summary>
+    /// zenity o, si no está o no puede abrirse, kdialog. Null si el usuario cancela. Sin ninguno de los dos lanza
+    /// <see cref="InvalidOperationException"/>, para que la ventana lo diga en vez de no hacer nada.
+    /// </summary>
     private static async Task<string?> DialogoAsync(string[] zenity, string[] kdialog)
     {
         foreach ((string exe, string[] args) in new[] { ("zenity", zenity), ("kdialog", kdialog) })
         {
-            ProcessStartInfo i = new(exe) { RedirectStandardOutput = true, UseShellExecute = false };
+            ProcessStartInfo i = new(exe) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
             foreach (string a in args) i.ArgumentList.Add(a);
             Process? p;
             try { p = Process.Start(i); }
@@ -52,9 +83,11 @@ internal static partial class Plataforma
             {
                 string salida = await p.StandardOutput.ReadToEndAsync();
                 await p.WaitForExitAsync();
-                return p.ExitCode == 0 ? salida : null;
+                if (p.ExitCode == 0) return salida;
+                if (p.ExitCode == 1) return null; // cancelado
+                // Otro código (sin pantalla, opción no admitida…): se prueba el siguiente.
             }
         }
-        return null;
+        throw new InvalidOperationException("Para elegir archivos hace falta zenity o kdialog. Instala uno (por ejemplo, «sudo apt install zenity») o arrastra los archivos a la ventana.");
     }
 }

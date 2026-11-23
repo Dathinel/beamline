@@ -1,4 +1,4 @@
-﻿# Distribución de BeamLine para Windows: zip autocontenido, instalador (Inno Setup) y entrada del catálogo del Lanzador
+# Distribución de BeamLine para Windows: zip autocontenido, instalador (Inno Setup) y entrada del catálogo del Lanzador
 # (sin firmar: la firma la hace quien publica). Antes: build\app.ps1 (deja dist\BeamLine publicado con AOT).
 # Uso: powershell -NoProfile -ExecutionPolicy Bypass -File build\distribuir.ps1 [-SinInstalador]
 param([switch]$SinInstalador)
@@ -11,7 +11,8 @@ $App = Join-Path $Dist 'BeamLine'
 if (-not (Test-Path -LiteralPath (Join-Path $App 'BeamLine.exe'))) { throw 'Falta dist\BeamLine\BeamLine.exe: corre antes build\app.ps1.' }
 if (-not (Test-Path -LiteralPath (Join-Path $App 'beamline-red.exe'))) { throw 'Falta beamline-red.exe junto a la app.' }
 
-Copy-Item -LiteralPath (Join-Path $Raiz 'LICENSE'), (Join-Path $Raiz 'LICENCIAS.md') -Destination $App -Force
+& (Join-Path $PSScriptRoot 'avisos.ps1')
+Copy-Item -LiteralPath (Join-Path $Raiz 'LICENSE'), (Join-Path $Raiz 'LICENCIAS.md'), (Join-Path $Dist 'AVISOS-TERCEROS.txt') -Destination $App -Force
 $leeme = @"
 BeamLine $Version
 
@@ -20,8 +21,10 @@ Envía archivos y carpetas de cualquier tamaño a otros equipos: en tu red y por
 - Abre BeamLine.exe en los dos equipos. Los de tu red aparecen solos; a uno de fuera, pásale tu billete («Copiar mi billete»).
 - Marca uno o varios equipos y suelta archivos o carpetas en la zona azul. El otro elige qué acepta.
 - Si se corta, al volver a enviar sigue donde iba.
+- La primera vez, Windows pide permiso en el cortafuegos: acéptalo en redes privadas para que te vean los de tu red.
+- Lo recibido va a Descargas\BeamLine. Desinstalar no borra lo recibido ni tu identidad (%LOCALAPPDATA%\BeamLine).
 
-Licencia: MIT. Componentes de terceros: LICENCIAS.md.
+Licencia: MIT. Componentes de terceros: LICENCIAS.md y AVISOS-TERCEROS.txt.
 "@
 [IO.File]::WriteAllText((Join-Path $App 'LEEME.txt'), $leeme, (New-Object Text.UTF8Encoding $false))
 Get-ChildItem -LiteralPath $App -Recurse -File | Where-Object { $_.Extension -in '.pdb', '.xml' } | Remove-Item -Force
@@ -32,7 +35,8 @@ $z = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Creat
 try {
     $padre = (Resolve-Path -LiteralPath $App).Path.TrimEnd('\') + '\'
     foreach ($f in Get-ChildItem -LiteralPath $App -Recurse -File) {
-        [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($z, $f.FullName, 'BeamLine/' + $f.FullName.Substring($padre.Length).Replace('\', '/'), [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        # Sin carpeta raíz, como Subtitular: el Lanzador extrae tal cual y busca el .exe en el primer nivel.
+        [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($z, $f.FullName, $f.FullName.Substring($padre.Length).Replace('\', '/'), [IO.Compression.CompressionLevel]::Optimal) | Out-Null
     }
 } finally { $z.Dispose() }
 Write-Host "Zip: $zip ($([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB)"
