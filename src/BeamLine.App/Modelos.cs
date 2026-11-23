@@ -67,6 +67,8 @@ public sealed partial class Transferencia(long id, bool entrante, string titulo,
     public bool Activa { get => _activa; set => Poner(ref _activa, value); }
     public bool Fallo { get => _fallo; set => Poner(ref _fallo, value); }
     public bool Ok { get; set; }
+    public int Archivos { get; set; }
+    public int Aceptados { get; set; }
 
     /// <summary>Lo que abre «Mostrar» en el Explorador al terminar de recibir.</summary>
     public string? Mostrar { get => _mostrar; set { Poner(ref _mostrar, value); Avisar(nameof(PuedeMostrar)); } }

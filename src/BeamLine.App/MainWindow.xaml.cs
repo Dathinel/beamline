@@ -72,15 +72,17 @@ public sealed partial class MainWindow : Window
         {
             Beam b = await Beam.AbrirAsync(Path.Combine(AppContext.BaseDirectory, "beamline-red.exe"),
                 new OpcionesEquipo(_identidad, _ajustes.Alias, Path.Combine(_arranque.Datos, "almacen"),
-                    new OpcionesRed(_ajustes.Rele, Mdns: !autoprueba)));
-            b.OfertaRecibida += o => EnHilo(() => AlRecibirOferta(o));
-            b.OfertaRetirada += id => EnHilo(() => AlRetirarOferta(id));
-            b.Respondida += r => EnHilo(() => AlResponder(r));
-            b.Avanzo += a => EnHilo(() => AlAvanzar(a));
-            b.Termino += f => EnHilo(() => AlTerminar(f));
-            b.CercanoCambio += c => EnHilo(() => AlCambiarCercano(c));
-            b.Caido += e => EnHilo(() => { MiEstado.Text = "La red se detuvo: " + e.Message; Avisar("Cierra y vuelve a abrir BeamLine.", InfoBarSeverity.Error); });
-            b.ManejadorFallo += e => Debug.WriteLine(e);
+                    new OpcionesRed(_ajustes.Rele, Mdns: !autoprueba)), b =>
+                {
+                    b.OfertaRecibida += o => EnHilo(() => AlRecibirOferta(o));
+                    b.OfertaRetirada += id => EnHilo(() => AlRetirarOferta(id));
+                    b.Respondida += r => EnHilo(() => AlResponder(r));
+                    b.Avanzo += a => EnHilo(() => AlAvanzar(a));
+                    b.Termino += f => EnHilo(() => AlTerminar(f));
+                    b.CercanoCambio += c => EnHilo(() => AlCambiarCercano(c));
+                    b.Caido += e => EnHilo(() => { MiEstado.Text = "La red se detuvo: " + e.Message; Avisar("Cierra y vuelve a abrir BeamLine.", InfoBarSeverity.Error); });
+                    b.ManejadorFallo += e => Debug.WriteLine(e);
+                });
             _beam = b;
             _reloj.Start();
             await RefrescarEstadoAsync();
@@ -98,6 +100,11 @@ public sealed partial class MainWindow : Window
         try
         {
             Estado e = await _beam.EstadoAsync();
+            // Por si se perdió algún evento «cercano»: la lista del estado manda.
+            foreach (Cercano c in e.Cercanos)
+                if (Destinos.FirstOrDefault(d => d.Clave == c.Clave) is not { Cercano: true } d || d.Alias != c.Alias) AlCambiarCercano(c);
+            foreach (Destino d in Destinos.Where(d => d.Cercano && e.Cercanos.All(c => c.Clave != d.Clave)).ToList())
+                AlCambiarCercano(new Cercano(d.Clave, d.Alias, false));
             MiEstado.Text = _ajustes.Rele == "ninguno" ? "Solo tu red y billetes con dirección directa"
                 : e.ReleConectado ? "Conectado: tu red e internet" : "Solo tu red (sin conexión con el relé)";
         }
@@ -279,6 +286,8 @@ public sealed partial class MainWindow : Window
             Transferencias.Insert(0, new Transferencia(id, false, $"Para {alias}: {Texto.Archivos(lista.Count)}, {Texto.Tamano(total)}", total)
             {
                 Estado = "Esperando a que lo acepte…",
+                Archivos = lista.Count,
+                Aceptados = lista.Count,
             });
             return id;
         }
@@ -300,6 +309,7 @@ public sealed partial class MainWindow : Window
             return;
         }
         _pendientes.Enqueue(o);
+        Parpadeo.SiNoEstaAlFrente(WinRT.Interop.WindowNative.GetWindowHandle(this));
         if (_dialogo is null) _ = MostrarOfertasAsync();
     }
 
@@ -398,7 +408,8 @@ public sealed partial class MainWindow : Window
     private void AlResponder(Respuesta r)
     {
         if (Buscar(r.Envio) is not { } t || r.Rechazada) return; // el rechazo llega también como fin
-        t.Estado = "Enviando…";
+        t.Aceptados = r.Aceptados.Count;
+        t.Estado = t.Aceptados == t.Archivos ? "Enviando…" : $"Aceptó {t.Aceptados} de {t.Archivos}; enviando…";
     }
 
     private void AlAvanzar(Avance a)
@@ -417,12 +428,14 @@ public sealed partial class MainWindow : Window
         if (f.Ok)
         {
             t.Progreso = 100;
-            t.Estado = t.Entrante ? $"Recibido en {_ajustes.Carpeta}" : "Enviado";
+            t.Estado = t.Entrante ? $"Recibido en {_ajustes.Carpeta}"
+                : t.Aceptados < t.Archivos ? $"Enviado: aceptó {t.Aceptados} de {t.Archivos}" : "Enviado";
             if (t.Entrante && f.Rutas.Count > 0) t.Mostrar = f.Rutas[0];
         }
         else
         {
             t.Fallo = true;
+            t.Progreso = 100; // barra entera en rojo: se ve de un vistazo que no salió
             t.Estado = Texto.Error(f.Error);
         }
     }

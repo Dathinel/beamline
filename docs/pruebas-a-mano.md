@@ -19,5 +19,9 @@ Las juzga Daniel. Lo que encuentre entra como corrección.
 9. **Ajustes.** Cambia el nombre de «ana»: en «beto» aparece con el nombre nuevo. Con «Solo tu red local», el estado lo dice.
 10. **Fluidez.** Mira si algo se ve torpe: tamaños, textos, la zona de soltar, el tema claro y el oscuro.
 
+## Ya comprobado por Claude con el ratón (23-nov)
+Los puntos 2 (con «Elegir carpeta»), 3, 4, 6, 7, 8 y 9, más «Mostrar» y el parpadeo en la barra de tareas. Quedan para Daniel: arrastrar desde el Explorador, cancelar a mitad de un archivo grande y el punto 10.
+En un solo PC, el punto 1 falla en un sentido (mDNS entre dos procesos); entre dos PC debería verse en los dos.
+
 ## Comprobado sin ratón
 `build\app.ps1 -Autoprueba` abre el exe AOT con la ventana fuera de pantalla. Recibe 5 MB sin preguntar de un equipo de confianza y envía una carpeta por el mismo camino que el botón. Deja `dist\autoprueba.txt`; el 23-nov tardó 480 ms.

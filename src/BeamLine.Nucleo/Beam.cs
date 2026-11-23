@@ -31,7 +31,11 @@ public sealed class Beam : IAsyncDisposable
 
     private Beam(ModuleProcess proceso) => _proceso = proceso;
 
-    public static async Task<Beam> AbrirAsync(string ejecutable, OpcionesEquipo o, CancellationToken ct = default)
+    /// <summary>
+    /// Abre beamline-red. Para no perder los primeros eventos (un cercano visto enseguida, una oferta),
+    /// suscríbete en <paramref name="suscribir"/>, que corre antes de empezar a leerlos.
+    /// </summary>
+    public static async Task<Beam> AbrirAsync(string ejecutable, OpcionesEquipo o, Action<Beam>? suscribir = null, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(o);
         ModuleProcess p;
@@ -69,6 +73,7 @@ public sealed class Beam : IAsyncDisposable
             await b.DisposeAsync().ConfigureAwait(false);
             throw;
         }
+        suscribir?.Invoke(b);
         b._lectura = Task.Run(b.LeerAsync, CancellationToken.None);
         return b;
     }

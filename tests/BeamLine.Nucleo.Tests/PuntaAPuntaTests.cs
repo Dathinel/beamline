@@ -26,14 +26,15 @@ public sealed class PuntaAPuntaTests : IAsyncLifetime
 
     private async Task<Beam> AbrirAsync(string alias, ConcurrentQueue<object> cola)
     {
-        Beam b = await Beam.AbrirAsync(RutaRed, new OpcionesEquipo(Dathinel.Sala.Identidad.Nueva(), alias,
-            Path.Combine(_dir, "almacen-" + alias), new OpcionesRed("ninguno", Mdns: false)));
-        b.OfertaRecibida += o => cola.Enqueue(o);
-        b.Respondida += r => cola.Enqueue(r);
-        b.Termino += f => cola.Enqueue(f);
-        b.Avanzo += a => cola.Enqueue(a);
-        b.OfertaRetirada += id => cola.Enqueue(id);
-        return b;
+        return await Beam.AbrirAsync(RutaRed, new OpcionesEquipo(Dathinel.Sala.Identidad.Nueva(), alias,
+            Path.Combine(_dir, "almacen-" + alias), new OpcionesRed("ninguno", Mdns: false)), b =>
+        {
+            b.OfertaRecibida += o => cola.Enqueue(o);
+            b.Respondida += r => cola.Enqueue(r);
+            b.Termino += f => cola.Enqueue(f);
+            b.Avanzo += a => cola.Enqueue(a);
+            b.OfertaRetirada += id => cola.Enqueue(id);
+        });
     }
 
     public async Task InitializeAsync()

@@ -20,11 +20,13 @@ internal static class Autoprueba
         try
         {
             Beam app = v.Red ?? throw new InvalidOperationException("la app no abrió su red");
-            await using Beam probador = await Beam.AbrirAsync(Path.Combine(AppContext.BaseDirectory, "beamline-red.exe"),
-                new OpcionesEquipo(Dathinel.Sala.Identidad.Nueva(), "probador", Path.Combine(dir, "almacen"), new OpcionesRed("ninguno", Mdns: false)));
             TaskCompletionSource<Fin> finProbador = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            probador.Termino += f => finProbador.TrySetResult(f);
-            probador.OfertaRecibida += o => _ = probador.ResponderAsync(o.Id, [.. Enumerable.Range(0, o.Archivos.Count)], Path.Combine(dir, "recibido"));
+            await using Beam probador = await Beam.AbrirAsync(Path.Combine(AppContext.BaseDirectory, "beamline-red.exe"),
+                new OpcionesEquipo(Dathinel.Sala.Identidad.Nueva(), "probador", Path.Combine(dir, "almacen"), new OpcionesRed("ninguno", Mdns: false)), b =>
+                {
+                    b.Termino += f => finProbador.TrySetResult(f);
+                    b.OfertaRecibida += o => _ = b.ResponderAsync(o.Id, [.. Enumerable.Range(0, o.Archivos.Count)], Path.Combine(dir, "recibido"));
+                });
             v.AnadirConfianza(probador.Clave, probador.Billete, "probador");
 
             // 1. El probador envía 5 MB: la app guarda sin preguntar.

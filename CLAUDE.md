@@ -66,6 +66,8 @@ Detalles que conviene saber:
    La autoprueba AOT pasa.
 
    Faltan:
-   - el repaso con ratón de Daniel (`docs\pruebas-a-mano.md`). La sesión no tuvo permiso para controlar la pantalla.
+   - el repaso de Daniel por fluidez (`docs\pruebas-a-mano.md`). Claude ya lo probó con el ratón el 23-nov con dos ventanas: elegir carpeta y archivos, aceptar una parte, rechazar, cancelar con el diálogo abierto, sin preguntar, billete, ajustes y «Mostrar». Arregló tres cosas: eventos perdidos al abrir, el recuento de aceptados y el aviso en la barra de tareas.
+   - el mDNS entre dos procesos del mismo PC: falla en un sentido, según cuál se abra primero; la lista se corrige sola al llegar una oferta. Entre dos PC hay que comprobarlo con la medida.
+   - arrastrar desde el Explorador: el control de pantalla no puede hacerlo; lo prueba Daniel.
    - el QR del billete, que no tiene sentido sin una app de móvil y se aparca.
 3. Fase 3: varios destinatarios a la vez y relé propio. Por el relé de n0 no se puede pasar archivos.
