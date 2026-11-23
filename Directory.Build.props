@@ -11,6 +11,7 @@
     <Product>BeamLine</Product>
     <Version>0.1.0</Version>
     <Copyright>Copyright (C) 2026 Dathinel</Copyright>
+    <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 </Project>

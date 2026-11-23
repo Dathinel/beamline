@@ -1,9 +1,9 @@
 # BeamLine (nombre provisional)
 
 App de envío de archivos tipo LocalSend que también funciona por internet: iroh + iroh-blobs.
-- **Privada y sin remoto hasta terminarla** (Daniel, 22-nov).
-- Licencia MIT provisional: Daniel no la ha elegido.
-- Nombre por decidir: Daniel propuso File Send, BeamLine Send y Skybridge Transfer. Antes de publicar hay que revisar la marca.
+- **Pública en `Dathinel/beamline`** desde el 23-nov (Daniel: «Público ya»).
+- Licencia GPLv3, solo la versión 3 (Daniel, 23-nov). Sala, su base, sigue siendo MIT.
+- Nombre: BeamLine (Daniel, 23-nov). La marca BEAMLINE registrada en EE. UU. es de otro sector; ver `docs\legal.md`.
 
 ## Cómo está hecho
 

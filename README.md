@@ -1,4 +1,4 @@
-# BeamLine (nombre provisional)
+# BeamLine
 
 Envía archivos y carpetas de cualquier tamaño entre equipos, en la misma red o por internet, sin cuenta ni nube. Es como LocalSend, pero también funciona fuera de casa. Usa iroh (QUIC con TLS 1.3, cifrado de extremo a extremo) e iroh-blobs (verificación BLAKE3 por trozos y reanudación).
 
@@ -26,5 +26,7 @@ powershell -File build\app.ps1 -Autoprueba
 - **Directa:** 134 MiB/s entre dos procesos en este PC (fase 0).
 - **Red simulada** (contenedores con `tc netem`, `docs/medir-entre-pc.md`): ver la tabla del 23-nov.
 - **A tres a la vez:** el emisor sube 1,0 veces el tamaño.
+
+Licencia: GNU GPL versión 3, solo la versión 3 (`GPL-3.0-only`); ver [LICENSE](LICENSE). Componentes de terceros en [LICENCIAS.md](LICENCIAS.md).
 
 Detalle en `docs/` (`plan.md`, `protocolo.md`, `medir-entre-pc.md`, `pruebas-a-mano.md`) y estado en `CLAUDE.md`.

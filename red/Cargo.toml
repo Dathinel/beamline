@@ -3,7 +3,7 @@ name = "beamline-red"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.91"
-license = "MIT"
+license = "GPL-3.0-only"
 description = "Red de BeamLine: iroh e iroh-blobs detrás del protocolo de módulos v1"
 publish = false
 

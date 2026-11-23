@@ -1,4 +1,4 @@
-# Distribución de BeamLine para Windows: zip autocontenido, instalador (Inno Setup) y entrada del catálogo del Lanzador
+﻿# Distribución de BeamLine para Windows: zip autocontenido, instalador (Inno Setup) y entrada del catálogo del Lanzador
 # (sin firmar: la firma la hace quien publica). Antes: build\app.ps1 (deja dist\BeamLine publicado con AOT).
 # Uso: powershell -NoProfile -ExecutionPolicy Bypass -File build\distribuir.ps1 [-SinInstalador]
 param([switch]$SinInstalador)
@@ -24,7 +24,7 @@ Envía archivos y carpetas de cualquier tamaño a otros equipos: en tu red y por
 - La primera vez, Windows pide permiso en el cortafuegos: acéptalo en redes privadas para que te vean los de tu red.
 - Lo recibido va a Descargas\BeamLine. Desinstalar no borra lo recibido ni tu identidad (%LOCALAPPDATA%\BeamLine).
 
-Licencia: MIT. Componentes de terceros: LICENCIAS.md y AVISOS-TERCEROS.txt.
+Licencia: GNU GPL versión 3 (GPL-3.0-only). Código: https://github.com/Dathinel/beamline. Componentes de terceros: LICENCIAS.md y AVISOS-TERCEROS.txt.
 "@
 [IO.File]::WriteAllText((Join-Path $App 'LEEME.txt'), $leeme, (New-Object Text.UTF8Encoding $false))
 Get-ChildItem -LiteralPath $App -Recurse -File | Where-Object { $_.Extension -in '.pdb', '.xml' } | Remove-Item -Force
