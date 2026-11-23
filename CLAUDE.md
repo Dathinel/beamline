@@ -16,8 +16,8 @@ App de envío de archivos tipo LocalSend que también funciona por internet: iro
 - El contrato está en `docs\protocolo.md`.
 - Entorno: `. build\entorno.ps1`. Por ahora usa el `.entorno` de la copia de trabajo de Sala.
 - Pruebas:
-  - Rust: `cd red; cargo test`. Hay 18: 5 unitarias y 13 de punta a punta, que incluyen las hostiles, mDNS, mil archivos, cinco a la vez y reanudar sin duplicar.
-  - C#: `dotnet test BeamLine.slnx`. Hay 8, y 7 de ellas usan dos procesos reales.
+  - Rust: `cd red; cargo test`. Hay 32: 19 unitarias (`src\equipo\pruebas.rs`: enlaces, temporales, tamaño falso, plazos, cupos, espacio, permisos, carreras, reservas) y 13 de punta a punta.
+  - C#: `dotnet test BeamLine.slnx`. Hay 10, y 9 de ellas usan dos procesos reales.
   - No hay CI porque no hay remoto.
 
 ## Estado
@@ -50,9 +50,18 @@ Detalles que conviene saber:
 - Los turnos se toman al aceptar, no al ofrecer: si no, cuatro ofertas sin respuesta bloquean la quinta. El que envía da los permisos antes de mandar `listo`.
 - Exportar con `Copy` duplica en disco lo bajado hasta la próxima limpieza del almacén (shortcut anotado en `bajar`).
 
+- Revisión de bloque de las fases 1 y 2 hecha por ChatGPT (gpt-6-astra) el 23-nov: 24 hallazgos.
+  - Unidos: los del núcleo (1-3, 5-9, 14, 19) en `ea35ca5` y los del cliente y la interfaz (4, 11-13, 15-18, 21) en `0b5a046`, cada uno con su prueba.
+  - El 10 (por el relé de n0 no deben ir archivos) pasa a la fase 3, con el relé propio.
+  - Las preguntas 22-24 son para Daniel; abajo, con la opción recomendada.
+  - Ojo: exportar desde iroh-blobs sobre el temporal ya reservado. Copiarlo a mano era un 46 % más lento.
+
 ## Siguiente paso
 
 1. Preguntas abiertas para Daniel, avanzando con la recomendada:
+   - «Sin relé» deja usar billetes con IP pública (recomendado) o aísla solo en la LAN;
+   - límites a los equipos de confianza (recomendado: los mismos que al resto, más quitar la confianza con el clic derecho);
+   - historial que dure al cerrar la app: aparcado (se recomienda dejarlo para después de la fase 3);
    - billetes sin secreto ni caducidad (recomendado, porque cada oferta se acepta a mano) o de un uso;
    - lo bajado a medias se guarda 7 días para reanudar.
 2. Fase 2 (23-nov), en código:
