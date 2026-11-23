@@ -14,8 +14,18 @@ internal static partial class Plataforma
 
     public static void Colocar(Window v, bool fueraDePantalla)
     {
-        v.AppWindow.Resize(new Windows.Graphics.SizeInt32(960, 640));
+        v.AppWindow.Resize(new Windows.Graphics.SizeInt32(1040, 700));
         if (fueraDePantalla) v.AppWindow.Move(new Windows.Graphics.PointInt32(-20000, -20000));
+    }
+
+    /// <summary>La barra de título es la de la app (logo y nombre) y el icono de la ventana, el de la marca.</summary>
+    public static void Barra(Window v, UIElement barra)
+    {
+        v.ExtendsContentIntoTitleBar = true;
+        v.SetTitleBar(barra);
+        v.AppWindow.TitleBar.PreferredHeightOption = Microsoft.UI.Windowing.TitleBarHeightOption.Tall;
+        string icono = Path.Combine(AppContext.BaseDirectory, "beamline.ico");
+        if (File.Exists(icono)) v.AppWindow.SetIcon(icono);
     }
 
     public static async Task<IReadOnlyList<string>> ElegirArchivosAsync(Window v)

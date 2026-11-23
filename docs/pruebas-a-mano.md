@@ -15,7 +15,7 @@ Las juzga Daniel. Lo que encuentre entra como corrección.
 5. **Cancelar.** Envía un archivo grande (unos GB) y pulsa Cancelar a mitad, en cualquiera de las dos ventanas: las dos quedan en «Cancelado» y en Descargas no quedan restos.
 6. **Retirar antes de responder.** Envía y cancela en «ana» con el diálogo abierto en «beto»: el diálogo se cierra solo y aparece el aviso.
 7. **Sin preguntar.** Marca «Guardar lo suyo sin preguntar» al aceptar, o hazlo con el clic derecho sobre el equipo. El siguiente envío se guarda sin diálogo.
-8. **Billete.** En «beto», pulsa «Copiar mi billete» y pégalo en la caja de «ana»: la zona dice «el equipo del billete» y se puede enviar. «Guardar en la lista» lo deja guardado.
+8. **Ticket.** En «beto», pulsa «Copiar mi ticket» y pégalo en «Añadir por ticket» de «ana»: la zona dice «Se enviarán a el equipo del ticket» y se puede enviar. El botón «+» lo deja guardado.
 9. **Ajustes.** Cambia el nombre de «ana»: en «beto» aparece con el nombre nuevo. Con «Solo tu red local», el estado lo dice.
 10. **Fluidez.** Mira si algo se ve torpe: tamaños, textos, la zona de soltar, el tema claro y el oscuro.
 
@@ -34,7 +34,7 @@ En un solo PC, el punto 1 falla en un sentido (mDNS entre dos procesos); entre d
 3. Con BeamLine abierto en Windows y en Linux, en la misma red, ¿se ven los dos? Enviar en los dos sentidos.
 4. Arrastrar archivos desde el gestor de archivos a la zona azul.
 5. «Mostrar» abre la carpeta con el gestor de archivos (`xdg-open`).
-6. El billete: «Copiar mi billete» en Linux y pegarlo en Windows, y al revés. Es la forma de llegar a un equipo de fuera, y en Linux el portapapeles solo lo probó la autoprueba de Rodaje.
+6. El ticket: «Copiar mi ticket» en Linux y pegarlo en Windows, y al revés. Es la forma de llegar a un equipo de fuera, y en Linux el portapapeles solo lo probó la autoprueba de Rodaje.
 7. Ajustes (nombre, carpeta, relé, límite) y el clic derecho sobre un equipo («Guardar lo suyo sin preguntar»). La autoprueba no los abre.
 8. Sin zenity ni kdialog, «Elegir archivos» tiene que avisar de que falta. Recibir va a la carpeta de descargas del escritorio («Descargas» en español).
 

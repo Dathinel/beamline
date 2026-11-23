@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- La marca de assets\marca\beamline.svg dibujada en XAML (vale igual en Windows y en Linux). -->
+<UserControl
+    x:Class="BeamLine.App.Logo"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Canvas Width="256" Height="256">
+        <Rectangle Canvas.Left="8" Canvas.Top="8" Width="240" Height="240" RadiusX="56" RadiusY="56">
+            <Rectangle.Fill>
+                <LinearGradientBrush StartPoint="0,1" EndPoint="1,0">
+                    <GradientStop Offset="0" Color="#1E40AF" />
+                    <GradientStop Offset="1" Color="#06B6D4" />
+                </LinearGradientBrush>
+            </Rectangle.Fill>
+        </Rectangle>
+        <Line X1="74" Y1="182" X2="182" Y2="74" Stroke="#47FFFFFF" StrokeThickness="44" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+        <Line X1="74" Y1="182" X2="182" Y2="74" Stroke="White" StrokeThickness="16" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+        <Ellipse Canvas.Left="42" Canvas.Top="158" Width="56" Height="56" Fill="White" />
+        <Ellipse Canvas.Left="58" Canvas.Top="174" Width="24" Height="24" Fill="#1E40AF" />
+        <Ellipse Canvas.Left="158" Canvas.Top="42" Width="56" Height="56" Fill="White" />
+        <Ellipse Canvas.Left="174" Canvas.Top="58" Width="24" Height="24" Fill="#06B6D4" />
+    </Canvas>
+</UserControl>

@@ -18,7 +18,7 @@ BeamLine $Version
 
 Envía archivos y carpetas de cualquier tamaño a otros equipos: en tu red y por internet, cifrado de extremo a extremo.
 
-- Abre BeamLine.exe en los dos equipos. Los de tu red aparecen solos; a uno de fuera, pásale tu billete («Copiar mi billete»).
+- Abre BeamLine.exe en los dos equipos. Los de tu red aparecen solos; a uno de fuera, pásale tu ticket («Copiar mi ticket»).
 - Marca uno o varios equipos y suelta archivos o carpetas en la zona azul. El otro elige qué acepta.
 - Si se corta, al volver a enviar sigue donde iba.
 - La primera vez, Windows pide permiso en el cortafuegos: acéptalo en redes privadas para que te vean los de tu red.

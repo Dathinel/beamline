@@ -27,8 +27,8 @@ public sealed partial class Destino(string clave) : Observable
 
     public string Clave { get; } = clave;
     public string? Billete { get; set; }
-    public string Alias { get => _alias; set => Poner(ref _alias, value); }
-    public bool Cercano { get => _cercano; set { Poner(ref _cercano, value); Avisar(nameof(Detalle)); } }
+    public string Alias { get => _alias; set { Poner(ref _alias, value); Avisar(nameof(Iniciales)); } }
+    public bool Cercano { get => _cercano; set { Poner(ref _cercano, value); Avisar(nameof(Detalle)); Avisar(nameof(Icono)); } }
     public bool Guardado { get => _guardado; set { Poner(ref _guardado, value); Avisar(nameof(Detalle)); Avisar(nameof(TextoGuardar)); } }
     public bool Confianza { get => _confianza; set { Poner(ref _confianza, value); Avisar(nameof(Detalle)); } }
 
@@ -47,6 +47,11 @@ public sealed partial class Destino(string clave) : Observable
     }
 
     public string TextoGuardar => Guardado ? "Quitar de la lista" : "Guardar en la lista";
+
+    public string Iniciales => Texto.Iniciales(_alias);
+
+    /// <summary>Wifi si está en tu red; estrella si solo está guardado.</summary>
+    public string Icono => Cercano ? "" : "";
 }
 
 /// <summary>Un envío o una recepción, con su avance.</summary>
@@ -56,17 +61,20 @@ public sealed partial class Transferencia(long id, bool entrante, string titulo,
     private string _estado = "";
     private bool _activa = true;
     private bool _fallo;
+    private bool _ok;
     private string? _mostrar;
 
     public long Id { get; } = id;
     public bool Entrante { get; } = entrante;
     public string Titulo { get; } = titulo;
+    /// <summary>Flecha mientras va; marca o equis al terminar.</summary>
+    public string Icono => _ok ? "" : _fallo ? "" : Entrante ? "" : "";
     public long Total { get; set; } = total;
     public double Progreso { get => _progreso; set => Poner(ref _progreso, value); }
     public string Estado { get => _estado; set => Poner(ref _estado, value); }
     public bool Activa { get => _activa; set => Poner(ref _activa, value); }
-    public bool Fallo { get => _fallo; set => Poner(ref _fallo, value); }
-    public bool Ok { get; set; }
+    public bool Fallo { get => _fallo; set { Poner(ref _fallo, value); Avisar(nameof(Icono)); } }
+    public bool Ok { get => _ok; set { Poner(ref _ok, value); Avisar(nameof(Icono)); } }
     public int Archivos { get; set; }
     public int Aceptados { get; set; }
     /// <summary>Dónde se guarda lo recibido (la carpeta de Ajustes al aceptar).</summary>
@@ -103,6 +111,17 @@ internal static class Texto
         < 3600 => $"{(int)(segundos / 60)} min",
         _ => $"{(int)(segundos / 3600)} h {(int)(segundos % 3600 / 60)} min",
     };
+
+    public static string Iniciales(string alias)
+    {
+        string[] p = alias.Split([' ', '-', '_', '('], StringSplitOptions.RemoveEmptyEntries);
+        return p.Length switch
+        {
+            0 => "?",
+            1 => p[0][..Math.Min(2, p[0].Length)].ToUpperInvariant(),
+            _ => $"{char.ToUpperInvariant(p[0][0])}{char.ToUpperInvariant(p[1][0])}",
+        };
+    }
 
     public static string Archivos(int n) => n == 1 ? "1 archivo" : $"{n} archivos";
 

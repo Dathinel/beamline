@@ -4,6 +4,7 @@ using BeamLine.Nucleo;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 
@@ -37,7 +38,10 @@ public sealed partial class MainWindow : Window
         _hilo = DispatcherQueue.GetForCurrentThread();
         InitializeComponent();
         Plataforma.Colocar(this, arranque.Autoprueba is not null);
-        Title = arranque.Perfil is null ? "BeamLine" : $"BeamLine ({arranque.Perfil})";
+        Plataforma.Barra(this, BarraTitulo);
+        Title = TextoTitulo.Text = arranque.Perfil is null ? "BeamLine" : $"BeamLine ({arranque.Perfil})";
+        Transferencias.CollectionChanged += (_, _) =>
+            SinTransferencias.Visibility = Transferencias.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
         _archivoAjustes = Path.Combine(arranque.Datos, "ajustes.json");
         _ajustes = Ajustes.Cargar(_archivoAjustes);
@@ -75,7 +79,8 @@ public sealed partial class MainWindow : Window
     private async Task AbrirBeamAsync()
     {
         MiAlias.Text = _ajustes.Alias;
-        MiEstado.Text = "Conectando…";
+        MisIniciales.Text = Texto.Iniciales(_ajustes.Alias);
+        Estado("Conectando…", Amarillo);
         bool autoprueba = _arranque.Autoprueba is not null;
         try
         {
@@ -92,7 +97,7 @@ public sealed partial class MainWindow : Window
                     b.Avanzo += a => En(() => AlEvento(a.Id, a));
                     b.Termino += f => En(() => AlEvento(f.Id, f));
                     b.CercanoCambio += c => En(() => AlCambiarCercano(c));
-                    b.Caido += e => En(() => { MiEstado.Text = "La red se detuvo: " + e.Message; Avisar("Cierra y vuelve a abrir BeamLine.", InfoBarSeverity.Error); });
+                    b.Caido += e => En(() => { Estado("La red se detuvo: " + e.Message, Rojo); Avisar("Cierra y vuelve a abrir BeamLine.", InfoBarSeverity.Error); });
                     b.ManejadorFallo += e => Debug.WriteLine(e);
                 });
             _beam = b;
@@ -101,7 +106,7 @@ public sealed partial class MainWindow : Window
         }
         catch (BeamException e)
         {
-            MiEstado.Text = "Sin red";
+            Estado("Sin red", Rojo);
             Avisar("No se pudo abrir la red: " + e.Message, InfoBarSeverity.Error);
         }
         ActualizarZona();
@@ -119,15 +124,28 @@ public sealed partial class MainWindow : Window
                 if (Destinos.FirstOrDefault(d => d.Clave == c.Clave) is not { Cercano: true } d || d.Alias != c.Alias) AlCambiarCercano(c);
             foreach (Destino d in Destinos.Where(d => d.Cercano && e.Cercanos.All(c => c.Clave != d.Clave)).ToList())
                 AlCambiarCercano(new Cercano(d.Clave, d.Alias, false));
-            MiEstado.Text = _ajustes.Rele == "ninguno" ? "Sin relé: tu red y billetes con dirección directa"
-                : !e.ReleConectado ? "Solo tu red (sin conexión con el relé)"
-                : EsUrl(_ajustes.Rele) ? (_ajustes.SoloRele ? "Conectado por tu relé (tu IP queda oculta)" : "Conectado: tu red e internet, con tu relé")
-                : "Conectado: tu red e internet";
+            if (_ajustes.Rele == "ninguno") Estado("Sin relé: tu red y tickets con dirección directa", Verde);
+            else if (!e.ReleConectado) Estado("Solo tu red (sin conexión con el relé)", Amarillo);
+            else Estado(EsUrl(_ajustes.Rele) ? (_ajustes.SoloRele ? "Conectado por tu relé (tu IP queda oculta)" : "Tu red e internet, con tu relé")
+                : "Conectado: tu red e internet", Verde);
         }
         catch (BeamException)
         {
             // Caido ya lo avisa.
         }
+    }
+
+    // Los pinceles de tema de WinUI no se encuentran desde Application.Resources: colores fijos que se leen en claro y oscuro.
+    private static readonly SolidColorBrush Verde = new(Windows.UI.Color.FromArgb(255, 0x22, 0xC5, 0x5E));
+    private static readonly SolidColorBrush Amarillo = new(Windows.UI.Color.FromArgb(255, 0xEA, 0xB3, 0x08));
+    private static readonly SolidColorBrush Rojo = new(Windows.UI.Color.FromArgb(255, 0xEF, 0x44, 0x44));
+    private static readonly SolidColorBrush Acento = new(Windows.UI.Color.FromArgb(255, 0x0E, 0xA5, 0xE9));
+    private Brush? _bordeZona;
+
+    private void Estado(string texto, SolidColorBrush color)
+    {
+        MiEstado.Text = texto;
+        MiPunto.Fill = color;
     }
 
     private static bool EsUrl(string rele) => rele.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
@@ -168,11 +186,12 @@ public sealed partial class MainWindow : Window
         List<Destino> e = Elegidos;
         string? a = e.Count switch
         {
-            0 => Beam.ClaveDeBillete(CajaBillete.Text) is not null ? "el equipo del billete" : null,
+            0 => Beam.ClaveDeBillete(CajaBillete.Text) is not null ? "el equipo del ticket" : null,
             1 => e[0].Alias,
             _ => $"{e.Count} equipos a la vez",
         };
-        TextoZona.Text = a is null ? "Elige a la izquierda a quién enviar" : $"Suelta aquí archivos o carpetas para enviarlos a {a}";
+        TextoZona.Text = a is null ? "Elige a quién enviar" : "Suelta aquí archivos o carpetas";
+        DetalleZona.Text = a is null ? "Marca un equipo de la lista o pega un ticket" : $"Se enviarán a {a}";
         ElegirArchivos.IsEnabled = ElegirCarpeta.IsEnabled = a is not null && _beam is not null;
     }
 
@@ -231,7 +250,7 @@ public sealed partial class MainWindow : Window
         DataPackage p = new();
         p.SetText(_beam.Billete);
         Clipboard.SetContent(p);
-        Avisar("Billete copiado. Quien lo tenga puede ofrecerte archivos; tú decides si los aceptas.", InfoBarSeverity.Success);
+        Avisar("Ticket copiado. Quien lo tenga puede ofrecerte archivos; tú decides si los aceptas.", InfoBarSeverity.Success);
     }
 
     // ---------- Enviar ----------
@@ -242,11 +261,21 @@ public sealed partial class MainWindow : Window
         {
             e.AcceptedOperation = DataPackageOperation.Copy;
             e.DragUIOverride.Caption = "Enviar";
+            Resaltar(true);
         }
+    }
+
+    private void Zona_DragLeave(object sender, DragEventArgs e) => Resaltar(false);
+
+    private void Resaltar(bool si)
+    {
+        _bordeZona ??= BordeZona.Stroke;
+        BordeZona.Stroke = si ? Acento : _bordeZona;
     }
 
     private async void Zona_Drop(object sender, DragEventArgs e)
     {
+        Resaltar(false);
         if (!e.DataView.Contains(StandardDataFormats.StorageItems)) return;
         IReadOnlyList<IStorageItem> items = await e.DataView.GetStorageItemsAsync();
         await EnviarRutasAsync([.. items.Select(i => i.Path).Where(p => !string.IsNullOrEmpty(p))]);
@@ -287,7 +316,7 @@ public sealed partial class MainWindow : Window
         List<Destino> e = Elegidos;
         if (e.Count > 0) return [.. e.Select(d => (d.A, d.Alias))];
         string t = CajaBillete.Text.Trim();
-        return Beam.ClaveDeBillete(t) is not null ? [(t, "el equipo del billete")] : null;
+        return Beam.ClaveDeBillete(t) is not null ? [(t, "el equipo del ticket")] : null;
     }
 
     internal async Task<IReadOnlyList<long>> EnviarRutasAsync(IReadOnlyList<string> rutas)
@@ -382,16 +411,16 @@ public sealed partial class MainWindow : Window
                 // SelectAll y SelectedRanges no existen en Uno (Linux): se marca y se lee por SelectedItems.
                 foreach (object x in archivos.Items) archivos.SelectedItems.Add(x);
                 CheckBox confiar = new() { Content = "Guardar lo suyo sin preguntar a partir de ahora" };
-                StackPanel cuerpo = new() { Spacing = 8 };
-                cuerpo.Children.Add(new TextBlock { Text = $"Quiere enviarte {Texto.Archivos(o.Archivos.Count)} ({Texto.Tamano(o.Total)}).", TextWrapping = TextWrapping.Wrap });
-                cuerpo.Children.Add(new TextBlock { Text = "Huella del equipo: " + Texto.Huella(o.De), TextWrapping = TextWrapping.Wrap, Opacity = 0.7, IsTextSelectionEnabled = true });
+                StackPanel cuerpo = new() { Spacing = 10, MinWidth = 420 };
+                cuerpo.Children.Add(Cabecera(o.Alias, "Huella: " + Texto.Huella(o.De)));
+                cuerpo.Children.Add(new TextBlock { Text = $"Quiere enviarte {Texto.Archivos(o.Archivos.Count)} ({Texto.Tamano(o.Total)}). Desmarca lo que no quieras.", TextWrapping = TextWrapping.Wrap });
                 cuerpo.Children.Add(archivos);
                 cuerpo.Children.Add(new TextBlock { Text = "Se guardará en " + _ajustes.Carpeta, TextWrapping = TextWrapping.Wrap, Opacity = 0.7 });
                 cuerpo.Children.Add(confiar);
                 ContentDialog dialogo = new()
                 {
                     XamlRoot = Raiz.XamlRoot,
-                    Title = $"{o.Alias} quiere enviarte archivos",
+                    Title = "Te quieren enviar archivos",
                     Content = cuerpo,
                     PrimaryButtonText = "Aceptar",
                     CloseButtonText = "Rechazar",
@@ -434,6 +463,27 @@ public sealed partial class MainWindow : Window
             _dialogo = null;
             _ofertaEnDialogo = -1;
         }
+    }
+
+    /// <summary>Avatar con iniciales, nombre y una línea pequeña debajo (la huella, para comprobarla de viva voz).</summary>
+    private static Grid Cabecera(string alias, string detalle)
+    {
+        Grid g = new() { ColumnSpacing = 12 };
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        g.ColumnDefinitions.Add(new ColumnDefinition());
+        Border avatar = new() { Width = 40, Height = 40, CornerRadius = new CornerRadius(20), Background = Acento };
+        avatar.Child = new TextBlock
+        {
+            Text = Texto.Iniciales(alias), Foreground = new SolidColorBrush(Microsoft.UI.Colors.White), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        };
+        StackPanel textos = new() { VerticalAlignment = VerticalAlignment.Center, Spacing = 2 };
+        textos.Children.Add(new TextBlock { Text = alias, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
+        textos.Children.Add(new TextBlock { Text = detalle, FontSize = 12, Opacity = 0.7, IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap });
+        Grid.SetColumn(textos, 1);
+        g.Children.Add(avatar);
+        g.Children.Add(textos);
+        return g;
     }
 
     private async Task RechazarAsync(long oferta)
@@ -588,7 +638,7 @@ public sealed partial class MainWindow : Window
         TextBox carpeta = new() { Header = "Carpeta donde se guarda lo recibido", Text = _ajustes.Carpeta };
         ComboBox rele = new() { Header = "Conexión", HorizontalAlignment = HorizontalAlignment.Stretch };
         rele.Items.Add("Tu red e internet (relé público de n0 para encontrarse)");
-        rele.Items.Add("Sin relé: tu red y billetes con dirección directa");
+        rele.Items.Add("Sin relé: tu red y tickets con dirección directa");
         rele.Items.Add("Tu red e internet con tu propio relé");
         rele.SelectedIndex = _ajustes.Rele == "ninguno" ? 1 : EsUrl(_ajustes.Rele) ? 2 : 0;
         TextBox url = new() { Header = "Dirección de tu relé", PlaceholderText = "https://rele.ejemplo.com", Text = EsUrl(_ajustes.Rele) ? _ajustes.Rele : "" };

@@ -13,6 +13,11 @@ internal static partial class Plataforma
     {
     }
 
+    // En X11 la barra la pone el gestor de ventanas: la de la app queda como cabecera.
+    public static void Barra(Window v, UIElement barra)
+    {
+    }
+
     public static async Task<IReadOnlyList<string>> ElegirArchivosAsync(Window v)
     {
         string inicio = Inicio();

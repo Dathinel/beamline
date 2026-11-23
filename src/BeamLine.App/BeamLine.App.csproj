@@ -24,6 +24,7 @@
     <EnableAotAnalyzer>true</EnableAotAnalyzer>
     <TrimmerSingleWarn>false</TrimmerSingleWarn>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <ApplicationIcon>..\..\assets\marca\beamline.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,6 +34,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- La ventana y la barra de tareas (AppWindow.SetIcon) usan el .ico suelto junto al exe. -->
+    <Content Include="..\..\assets\marca\beamline.ico" Link="beamline.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- build\app.ps1 compila beamline-red en release antes de publicar -->
     <Content Include="..\..\red\target\release\beamline-red.exe" Condition="Exists('..\..\red\target\release\beamline-red.exe')"
              Link="beamline-red.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

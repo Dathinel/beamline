@@ -514,7 +514,7 @@ impl Equipo {
         for a in a {
             let destino = if a.trim().starts_with("beam1") {
                 billete::leer(a)
-                    .ok_or(Fallo("billete-invalido", "El billete no es válido.".into()))?
+                    .ok_or(Fallo("billete-invalido", "El ticket no es válido.".into()))?
             } else {
                 let id: EndpointId = a.parse().map_err(|_| {
                     Fallo(

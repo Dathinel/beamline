@@ -1,13 +1,17 @@
+<img src="assets/marca/beamline-256.png" width="72" alt="">
+
 # BeamLine
 
 Envía archivos y carpetas de cualquier tamaño entre equipos, en la misma red o por internet, sin cuenta ni nube. Es como LocalSend, pero también funciona fuera de casa. Usa iroh (QUIC con TLS 1.3, cifrado de extremo a extremo) e iroh-blobs (verificación BLAKE3 por trozos y reanudación).
 
-- **Los de tu red aparecen solos.** A uno de fuera le pasas tu billete.
+- **Los de tu red aparecen solos.** A uno de fuera le pasas tu ticket.
 - **El otro decide qué acepta**, archivo por archivo. Los equipos de confianza pueden guardar sin preguntar.
 - **Si se corta, sigue donde iba.** No pisa nada: si un nombre ya existe con otro contenido, guarda «nombre (2)».
 - **A varios a la vez** (hasta 8): los receptores se reparten el trabajo y el que envía sube cada byte una sola vez.
 - **La primera vez**, Windows pide permiso en el cortafuegos: hay que aceptarlo en redes privadas para que te vean los de tu red.
 - **Sin pasar archivos por servidores ajenos:** con el relé público de n0 solo hay conexión directa. Para internet sin conexión directa se puede poner un relé propio.
+
+![BeamLine recibiendo un archivo](docs/img/ventana.png)
 
 ## Cómo se ejecuta
 

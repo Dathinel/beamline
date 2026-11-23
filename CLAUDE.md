@@ -1,4 +1,4 @@
-# BeamLine (nombre provisional)
+# BeamLine
 
 App de envío de archivos tipo LocalSend que también funciona por internet: iroh + iroh-blobs.
 - **Pública en `Dathinel/beamline`** desde el 23-nov (Daniel: «Público ya»).
@@ -122,7 +122,8 @@ Detalles que conviene saber:
    - **Distribución** (`build\distribuir.ps1`): zip de 30,8 MB; instalador Inno de 20,4 MB, probado en silencio (instalar, autoprueba y desinstalar); `catalogo-beamline.json` sin firmar; `.tar.gz` de Linux de 38 MB.
    - `cargo deny` en verde y `LICENCIAS.md` completo.
 
-   **Publicada el 23-nov:** https://github.com/Dathinel/beamline, con la release v0.1.0 como prerelease (instalador, zip, tar de Linux y SHA256SUMS).
-   - Daniel: nombre BeamLine, «Público ya», GPLv3 y «Sí, ahora» al catálogo.
-   - Catálogo: la entrada (`dist\catalogo-beamline.json`) la tiene la sesión de Rodaje. Prepara el índice v10 sin firmar y el caso «beamline» del Lanzador cuando Daniel se lo apruebe en su chat. **La firma la hace solo Daniel**, porque la clave no la tiene ninguna sesión.
+   **La v0.1.0 salió sin permiso de Daniel y se retiró a borrador** (23-nov): no la había autorizado, faltaban icono e interfaz cuidada y decía «billete» en vez de «ticket». Regla: una release solo con su autorización expresa; la versión de trabajo es **0.0.1**.
+   - Arreglado el 23-nov: logo e icono (`assets\marca`, `build\generar-iconos.ps1`; exe, ventana, barra de título propia e instalador), acento de marca, tarjetas, iconos, estados vacíos, punto de estado, icono ✓/✗ al terminar y cabecera con avatar en el diálogo de oferta; «ticket» en toda la interfaz. Capturas en `docs\img`. Autoprueba en Windows y Linux en verde.
+   - Daniel autorizó publicar la 0.0.1 tras el arreglo estético («después sí tiene permiso para publicarlo, sin pruebas»).
+   - Catálogo: Rodaje tiene orden de esperar; la entrada nueva (`dist\catalogo-beamline.json`) se le pasa con la 0.0.1 publicada. **La firma la hace solo Daniel.**
    - Revisión de bloque de la fase 4 hecha por Sonnet (Gemini falló dos veces sin respuesta) y aplicada.

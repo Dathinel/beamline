@@ -8,6 +8,14 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+            <!-- Acento de la marca (azul a cian del logo) en vez del color de acento del sistema. -->
+            <Color x:Key="SystemAccentColor">#2563EB</Color>
+            <Color x:Key="SystemAccentColorLight1">#0EA5E9</Color>
+            <Color x:Key="SystemAccentColorLight2">#38BDF8</Color>
+            <Color x:Key="SystemAccentColorLight3">#7DD3FC</Color>
+            <Color x:Key="SystemAccentColorDark1">#1E40AF</Color>
+            <Color x:Key="SystemAccentColorDark2">#1E3A8A</Color>
+            <Color x:Key="SystemAccentColorDark3">#172554</Color>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
