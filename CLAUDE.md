@@ -124,5 +124,5 @@ Detalles que conviene saber:
 
    **Publicada el 23-nov:** https://github.com/Dathinel/beamline, con la release v0.1.0 como prerelease (instalador, zip, tar de Linux y SHA256SUMS).
    - Daniel: nombre BeamLine, «Público ya», GPLv3 y «Sí, ahora» al catálogo.
-   - La entrada del catálogo (`dist\catalogo-beamline.json`) se la pasé a la sesión de Rodaje, que lleva `Dathinel/rodaje-catalogo` y la clave, para que la firme; falta su confirmación.
+   - Catálogo: la entrada (`dist\catalogo-beamline.json`) la tiene la sesión de Rodaje. Prepara el índice v10 sin firmar y el caso «beamline» del Lanzador cuando Daniel se lo apruebe en su chat. **La firma la hace solo Daniel**, porque la clave no la tiene ninguna sesión.
    - Revisión de bloque de la fase 4 hecha por Sonnet (Gemini falló dos veces sin respuesta) y aplicada.
