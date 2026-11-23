@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Cliente de beamline-red (docs/protocolo.md §1-2). La identidad y el protocolo de módulos vienen de Sala. -->
+  <PropertyGroup>
+    <RootNamespace>BeamLine.Nucleo</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Sala\src\Dathinel.Sala\Dathinel.Sala.csproj" />
+    <InternalsVisibleTo Include="BeamLine.Nucleo.Tests" />
+  </ItemGroup>
+
+</Project>

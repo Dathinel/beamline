@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BeamLine.Nucleo/BeamLine.Nucleo.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BeamLine.Nucleo.Tests/BeamLine.Nucleo.Tests.csproj" />
+  </Folder>
+</Solution>
