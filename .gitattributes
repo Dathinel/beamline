@@ -1,0 +1,3 @@
+# Los scripts de Linux corren en un contenedor: siempre con LF.
+*.sh text eol=lf
+Dockerfile text eol=lf
