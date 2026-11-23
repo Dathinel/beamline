@@ -5,4 +5,4 @@
 - [x] `LICENCIAS.md` con las de Rust (`cargo deny check` en verde) y las de .NET, Windows App SDK, Uno y Skia (23-nov).
 - [ ] **Relé:** documentar qué ve el operador (las IP y el tráfico cifrado) y cómo usar uno propio.
 - [x] Sin datos personales en el código ni en los documentos. Los commits van como «Dathinel» con el correo de Daniel, que según él ya no importa (19-nov). Revisar otra vez antes de subir.
-- [x] **Repositorio:** `Dathinel/beamline`, público (Daniel, 23-nov). La entrada del catálogo la firma la sesión de Rodaje, que lleva el catálogo.
+- [x] **Repositorio:** `Dathinel/beamline`, público (Daniel, 23-nov). Catálogo v10 con BeamLine 0.0.1, firmado y publicado el 23-nov (Daniel: «firmar hágalo usted»).

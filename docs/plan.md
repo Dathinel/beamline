@@ -77,7 +77,11 @@ Enviar archivos y carpetas de cualquier tamaño a uno o varios equipos, en la mi
 - `LICENCIAS.md` y `docs/legal.md`.
 - **Terminado cuando** se ha probado entre Windows y Linux y Daniel ha dado el visto bueno para publicar.
 
-**Fuera por ahora:** Android e iOS (es la gran ventaja de LocalSend; posible fase 5 junto a «Migrar apps a Android APK»), envío por enlace a un navegador y códigos cortos tipo croc (necesitan un servidor propio).
+**5. Android (Daniel, 23-nov: «Android únicamente»).** Es la gran ventaja de LocalSend. Encaja con la sesión «Migrar apps a Android APK». Antes de escribir código: reconocimiento, investigación y plan con stack comparado, para que lo apruebe Daniel.
+
+**Fuera:** iOS, envío por enlace a un navegador y códigos cortos tipo croc (necesitan un servidor propio), historial al cerrar y QR del ticket.
+
+**Aceptado sin probar (Daniel, 23-nov):** la medida entre dos PC reales (fase 0: 10 GiB, corte y reanudación, internet directa), el repaso a mano de `pruebas-a-mano.md` y la prueba con el USB de Linux. Daniel pidió hacerlo o darlo por aceptado; con un solo PC no se puede, así que valen las medidas en Docker (`medir-entre-pc.md`) y las autopruebas.
 
 ## Riesgos
 

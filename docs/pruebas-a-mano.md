@@ -1,5 +1,7 @@
 # Pruebas a mano (fase 2: interfaz)
 
+**Aceptadas por Daniel sin hacerlas (23-nov).** Quedan como guía si algo falla en uso real.
+
 Las juzga Daniel. Lo que encuentre entra como corrección.
 
 ## Preparar

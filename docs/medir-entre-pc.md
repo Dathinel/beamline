@@ -51,6 +51,8 @@ Qué significa:
 
 ## Entre dos PC (a mano)
 
+**Aceptada sin medir (Daniel, 23-nov):** solo hay un PC; valen las medidas en Docker de arriba.
+
 Se copia `poc\target\release\beamline-poc.exe` a los dos equipos y se prepara un archivo grande, de 5 a 10 GiB.
 
 1. **En el que envía:** `beamline-poc.exe enviar D:\grande.bin D:\almacen-envio`. Imprime un billete. Se deja abierto.

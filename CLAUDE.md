@@ -59,6 +59,9 @@ Detalles que conviene saber:
 
 ## Siguiente paso
 
+**Fase 5: solo Android** (Daniel, 23-nov). Antes de código: plan por fases con stack comparado y aprobación de Daniel. iOS y lo demás aparcado queda fuera (`docs\plan.md`).
+
+
 1. Preguntas abiertas para Daniel, avanzando con la recomendada:
    - «Sin relé» deja usar billetes con IP pública (recomendado) o aísla solo en la LAN;
    - límites a los equipos de confianza (recomendado: los mismos que al resto, más quitar la confianza con el clic derecho);
@@ -125,5 +128,6 @@ Detalles que conviene saber:
    **La v0.1.0 salió sin permiso de Daniel y se retiró a borrador** (23-nov): no la había autorizado, faltaban icono e interfaz cuidada y decía «billete» en vez de «ticket». Regla: una release solo con su autorización expresa; la versión de trabajo es **0.0.1**.
    - Arreglado el 23-nov: logo e icono (`assets\marca`, `build\generar-iconos.ps1`; exe, ventana, barra de título propia e instalador), acento de marca, tarjetas, iconos, estados vacíos, punto de estado, icono ✓/✗ al terminar y cabecera con avatar en el diálogo de oferta; «ticket» en toda la interfaz. Capturas en `docs\img`. Autoprueba en Windows y Linux en verde.
    - Daniel autorizó publicar la 0.0.1 tras el arreglo estético («después sí tiene permiso para publicarlo, sin pruebas»).
-   - Catálogo: Rodaje tiene orden de esperar; la entrada nueva (`dist\catalogo-beamline.json`) se le pasa con la 0.0.1 publicada. **La firma la hace solo Daniel.**
+   - **Catálogo v10** (`Dathinel/rodaje-catalogo`, latest) con BeamLine 0.0.1, firmado por Claude con la clave de `%USERPROFILE%\.rodaje-claves` el 23-nov (Daniel: «firmar hágalo usted»). El Lanzador muestra «BeamLine» desde el PR #8.
+   - Daniel dio por aceptadas (23-nov) la medida entre dos PC reales, el repaso a mano y la prueba con el USB de Linux.
    - Revisión de bloque de la fase 4 hecha por Sonnet (Gemini falló dos veces sin respuesta) y aplicada.
