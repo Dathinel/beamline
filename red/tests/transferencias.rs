@@ -80,7 +80,8 @@ fn aleatorio(ruta: &Path, n: usize) {
     if let Some(p) = ruta.parent() {
         std::fs::create_dir_all(p).unwrap();
     }
-    let datos: Vec<u8> = (0..n).map(|_| rand::random::<u8>()).collect();
+    let mut datos = vec![0u8; n];
+    rand::fill(&mut datos[..]);
     std::fs::write(ruta, datos).unwrap();
 }
 

@@ -59,7 +59,8 @@ async fn esperar(e: &Equipo, vistos: &mut Vec<Value>, f: impl Fn(&Value) -> bool
 }
 
 fn aleatorio(ruta: &Path, n: usize) -> Vec<u8> {
-    let datos: Vec<u8> = (0..n).map(|_| rand::random::<u8>()).collect();
+    let mut datos = vec![0u8; n];
+    rand::fill(&mut datos[..]);
     std::fs::write(ruta, &datos).unwrap();
     datos
 }
@@ -83,14 +84,16 @@ async fn a_tres(tamano: usize) -> (u64, u64) {
     assert_eq!(envios.len(), 3);
 
     let mut vistas: Vec<Vec<Value>> = vec![Vec::new(); 3];
-    for (k, r) in rs.iter().enumerate() {
-        let o = esperar(r, &mut vistas[k], |ev| ev["type"] == "oferta").await;
-        r.responder(
-            o["oferta"].as_u64().unwrap(),
-            vec![0],
-            Some(c.0.join(format!("destino-{k}"))),
-        )
-        .unwrap();
+    // Todos deben haber recibido la oferta antes de medir el reparto simultáneo.
+    // Mientras un destinatario todavía no ha respondido, los demás pueden recurrir al emisor.
+    let mut ofertas = Vec::new();
+    for (r, evs) in rs.iter().zip(&mut vistas) {
+        let o = esperar(r, evs, |ev| ev["type"] == "oferta").await;
+        ofertas.push(o["oferta"].as_u64().unwrap());
+    }
+    for (k, (r, oferta)) in rs.iter().zip(ofertas).enumerate() {
+        r.responder(oferta, vec![0], Some(c.0.join(format!("destino-{k}"))))
+            .unwrap();
     }
     let mut va = Vec::new();
     for id in &envios {
