@@ -16,7 +16,7 @@ App de envío de archivos tipo LocalSend que también funciona por internet: iro
 - El contrato está en `docs\protocolo.md`.
 - Entorno: `. build\entorno.ps1`. Por ahora usa el `.entorno` de la copia de trabajo de Sala.
 - Pruebas:
-  - Rust: `cd red; cargo test` (y `--features prueba` para la del relé local). Hay 41: 21 unitarias (`src\equipo\pruebas.rs` y el reparto de `grupo.rs`) y 20 de punta a punta (`tests\transferencias.rs` y `tests\grupo.rs`, que incluye un miembro hostil del grupo).
+  - Rust: `cd red; cargo test` (y `--features prueba` para la del relé local); `cargo deny check`. Hay 41: 21 unitarias (`src\equipo\pruebas.rs` y el reparto de `grupo.rs`) y 20 de punta a punta (`tests\transferencias.rs` y `tests\grupo.rs`, que incluye un miembro hostil del grupo).
   - C#: `dotnet test BeamLine.slnx`. Hay 11, y 10 de ellas usan procesos reales.
   - No hay CI porque no hay remoto.
 
@@ -108,4 +108,17 @@ Detalles que conviene saber:
    - un favorito sirve solo su trozo a los del grupo.
 
    Falta medir de verdad entre PC, con un relé propio en un VPS y con el reparto fuera de loopback (pregunta E).
-4. Fase 4: Linux con Uno, publicación y la entrada del Lanzador.
+4. Fase 4 (23-nov), hecha salvo publicar:
+   - **Medidas con PC simulados** en contenedores de Docker con `tc netem` (`docs\medir-entre-pc.md`):
+     - red local gigabit, 82 MiB/s;
+     - a tres a la vez con la subida limitada, los tres casi en lo que tarda uno, y el emisor sube 1,00 veces;
+     - con 0,1 % de pérdidas y 60 ms cae a ~4,5 MiB/s: BBR3 no lo mejora.
+   - **Linux** con Uno (Skia, X11, AOT), siguiendo a Rodaje:
+     - `src\BeamLine.App.Desktop` enlaza el código de la app; lo de cada sistema va en `Plataforma.Windows.cs` y `Plataforma.Desktop.cs`;
+     - `build\app-linux.ps1` compila en Docker y pasa la autoprueba bajo Xvfb;
+     - Windows envía a Linux con la huella igual.
+   - **Autoprueba** con un 4.º paso, el diálogo de oferta: arreglado `SelectAll`/`SelectedRanges`, que no existen en Uno.
+   - **Distribución** (`build\distribuir.ps1`): zip de 30,8 MB; instalador Inno de 20,4 MB, probado en silencio (instalar, autoprueba y desinstalar); `catalogo-beamline.json` sin firmar; `.tar.gz` de Linux de 38 MB.
+   - `cargo deny` en verde y `LICENCIAS.md` completo.
+
+   Para publicar falta lo que decide Daniel (`docs\legal.md`): nombre y marca, licencia, repositorio y firma del catálogo.

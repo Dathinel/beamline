@@ -1,0 +1,53 @@
+<Project Sdk="Uno.Sdk/7.0.22">
+
+  <!--
+    La app en Linux (fase 4): el mismo código y XAML de src\BeamLine.App, compilados con Uno (Skia, X11) para
+    net10.0-desktop, como Rodaje (D-066). Lo de cada sistema va en Plataforma.Windows.cs / Plataforma.Desktop.cs.
+    Se publica con build\app-linux.sh dentro de un contenedor (Native AOT necesita compilar en Linux).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-desktop</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <PublishAot>true</PublishAot>
+    <UnoSingleProject>true</UnoSingleProject>
+    <RootNamespace>BeamLine.App</RootNamespace>
+    <AssemblyName>beamline</AssemblyName>
+    <ApplicationTitle>BeamLine</ApplicationTitle>
+    <ApplicationId>io.github.dathinel.beamline</ApplicationId>
+    <ApplicationDisplayVersion>$(Version)</ApplicationDisplayVersion>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationPublisher>Dathinel</ApplicationPublisher>
+    <UnoFeatures>Skia;</UnoFeatures>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <!-- NETSDK1201, PRI257 y NU1507 vienen de la plantilla de Uno; Uno0001 marca miembros de WinUI que Uno no implementa. -->
+    <NoWarn>$(NoWarn);NU1507;NETSDK1201;PRI257;CA1001</NoWarn>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);Uno0001</WarningsNotAsErrors>
+    <App>..\BeamLine.App</App>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="$(App)\**\*.cs" Exclude="$(App)\bin\**;$(App)\obj\**;$(App)\**\*.Windows.cs" Link="%(RecursiveDir)%(Filename)%(Extension)" />
+    <ApplicationDefinition Include="$(App)\App.xaml" Link="App.xaml" />
+    <Page Include="$(App)\**\*.xaml" Exclude="$(App)\App.xaml;$(App)\bin\**;$(App)\obj\**" Link="%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BeamLine.Nucleo\BeamLine.Nucleo.csproj" />
+  </ItemGroup>
+
+  <!-- Los using implícitos de Uno.Sdk chocan con nombres propios (como en Rodaje). -->
+  <Target Name="QuitarUsingsDeUno" BeforeTargets="GenerateGlobalUsings">
+    <ItemGroup>
+      <Using Remove="@(Using)" Condition="'%(Using.Sdk)' == 'Uno'" />
+    </ItemGroup>
+  </Target>
+
+</Project>

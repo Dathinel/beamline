@@ -27,6 +27,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Lo de Linux va en *.Desktop.cs y solo entra en src\BeamLine.App.Desktop. -->
+    <Compile Remove="**\*.Desktop.cs" />
     <ProjectReference Include="..\BeamLine.Nucleo\BeamLine.Nucleo.csproj" />
   </ItemGroup>
 

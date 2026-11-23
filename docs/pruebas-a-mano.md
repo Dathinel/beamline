@@ -25,3 +25,16 @@ En un solo PC, el punto 1 falla en un sentido (mDNS entre dos procesos); entre d
 
 ## Comprobado sin ratón
 `build\app.ps1 -Autoprueba` abre el exe AOT con la ventana fuera de pantalla. Recibe 5 MB sin preguntar de un equipo de confianza y envía una carpeta por el mismo camino que el botón. Deja `dist\autoprueba.txt`; el 23-nov tardó 480 ms.
+
+## Linux (fase 4)
+
+`build\app-linux.ps1 -Autoprueba` compila en Docker y deja `dist\BeamLine-<versión>-linux-x64.tar.gz`. La autoprueba pasa bajo Xvfb, y una captura (`dist\captura-linux.png`) muestra la ventana bien dibujada. Lo que Daniel tiene que probar con el USB de Linux:
+1. Descomprimir el `.tar.gz` y abrir `BeamLine-linux/beamline`. ¿Abre en menos de un segundo y se ve bien?
+2. «Elegir archivos» y «Elegir carpeta» usan `zenity` (o `kdialog` en KDE): ¿salen, y se envía lo elegido?
+3. Con BeamLine abierto en Windows y en Linux, en la misma red, ¿se ven los dos? Enviar en los dos sentidos.
+4. Arrastrar archivos desde el gestor de archivos a la zona azul.
+5. «Mostrar» abre la carpeta con el gestor de archivos (`xdg-open`).
+
+Ya comprobado sin Daniel: Windows envía a Linux por un relé y la huella SHA-256 coincide (23-nov).
+
+Lo que en Linux no hace lo mismo que en Windows: no recuerda el tamaño de la ventana (Uno en X11 no lo permite) y la barra de tareas no parpadea al llegar una oferta.

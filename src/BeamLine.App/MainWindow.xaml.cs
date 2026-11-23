@@ -36,8 +36,7 @@ public sealed partial class MainWindow : Window
         _arranque = arranque;
         _hilo = DispatcherQueue.GetForCurrentThread();
         InitializeComponent();
-        AppWindow.Resize(new Windows.Graphics.SizeInt32(960, 640));
-        if (arranque.Autoprueba is not null) AppWindow.Move(new Windows.Graphics.PointInt32(-20000, -20000));
+        Plataforma.Colocar(this, arranque.Autoprueba is not null);
         Title = arranque.Perfil is null ? "BeamLine" : $"BeamLine ({arranque.Perfil})";
 
         _archivoAjustes = Path.Combine(arranque.Datos, "ajustes.json");
@@ -80,7 +79,7 @@ public sealed partial class MainWindow : Window
         bool autoprueba = _arranque.Autoprueba is not null;
         try
         {
-            Beam b = await Beam.AbrirAsync(Path.Combine(AppContext.BaseDirectory, "beamline-red.exe"),
+            Beam b = await Beam.AbrirAsync(Path.Combine(AppContext.BaseDirectory, Plataforma.Red),
                 new OpcionesEquipo(_identidad, _ajustes.Alias, Path.Combine(_arranque.Datos, "almacen"),
                     new OpcionesRed(_ajustes.Rele, _ajustes.SoloRele && EsUrl(_ajustes.Rele), Mdns: !autoprueba,
                         LimiteSubida: _ajustes.LimiteSubidaMBs > 0 ? (long)(_ajustes.LimiteSubidaMBs * (1 << 20)) : null)), b =>
@@ -255,17 +254,13 @@ public sealed partial class MainWindow : Window
 
     private async void ElegirArchivos_Click(object sender, RoutedEventArgs e)
     {
-        Microsoft.Windows.Storage.Pickers.FileOpenPicker p = new(AppWindow.Id);
-        p.FileTypeFilter.Add("*");
-        var r = await p.PickMultipleFilesAsync();
-        if (r is not null) await EnviarRutasAsync([.. r.Select(x => x.Path)]);
+        IReadOnlyList<string> r = await Plataforma.ElegirArchivosAsync(this);
+        if (r.Count > 0) await EnviarRutasAsync(r);
     }
 
     private async void ElegirCarpeta_Click(object sender, RoutedEventArgs e)
     {
-        Microsoft.Windows.Storage.Pickers.FolderPicker p = new(AppWindow.Id);
-        var r = await p.PickSingleFolderAsync();
-        if (r is not null) await EnviarRutasAsync([r.Path]);
+        if (await Plataforma.ElegirCarpetaAsync(this) is { } r) await EnviarRutasAsync([r]);
     }
 
     private List<(string A, string Alias)>? Objetivo()
@@ -352,7 +347,7 @@ public sealed partial class MainWindow : Window
             return;
         }
         _pendientes.Enqueue(o);
-        Parpadeo.SiNoEstaAlFrente(WinRT.Interop.WindowNative.GetWindowHandle(this));
+        Plataforma.Parpadear(this);
         if (!_hayDialogo) _ = MostrarOfertasAsync();
     }
 
@@ -365,7 +360,8 @@ public sealed partial class MainWindow : Window
             {
                 ListView archivos = new() { SelectionMode = ListViewSelectionMode.Multiple, MaxHeight = 260 };
                 foreach (ArchivoOfrecido a in o.Archivos) archivos.Items.Add($"{a.Nombre}  ·  {Texto.Tamano(a.Tamano)}");
-                archivos.SelectAll();
+                // SelectAll y SelectedRanges no existen en Uno (Linux): se marca y se lee por SelectedItems.
+                foreach (object x in archivos.Items) archivos.SelectedItems.Add(x);
                 CheckBox confiar = new() { Content = "Guardar lo suyo sin preguntar a partir de ahora" };
                 StackPanel cuerpo = new() { Spacing = 8 };
                 cuerpo.Children.Add(new TextBlock { Text = $"Quiere enviarte {Texto.Archivos(o.Archivos.Count)} ({Texto.Tamano(o.Total)}).", TextWrapping = TextWrapping.Wrap });
@@ -385,14 +381,25 @@ public sealed partial class MainWindow : Window
                 _dialogo = dialogo;
                 archivos.SelectionChanged += (_, _) => dialogo.IsPrimaryButtonEnabled = archivos.SelectedItems.Count > 0;
                 _ofertaEnDialogo = o.Id;
-                ContentDialogResult r = await dialogo.ShowAsync();
+                ContentDialogResult r;
+                if (ElegirEnPrueba is { } elegir)
+                {
+                    // Autoprueba: el diálogo se abre de verdad, se cambia la selección y se acepta.
+                    dialogo.Opened += (_, _) => { elegir(archivos); dialogo.Hide(); };
+                    await dialogo.ShowAsync();
+                    r = ContentDialogResult.Primary;
+                }
+                else
+                {
+                    r = await dialogo.ShowAsync();
+                }
                 bool retirada = _ofertaEnDialogo == -1;
                 _ofertaEnDialogo = -1;
                 _dialogo = null;
                 if (retirada) continue;
                 if (r == ContentDialogResult.Primary)
                 {
-                    List<int> elegidos = [.. Enumerable.Range(0, o.Archivos.Count).Where(i => archivos.SelectedRanges.Any(g => i >= g.FirstIndex && i <= g.LastIndex))];
+                    List<int> elegidos = [.. archivos.SelectedItems.Select(x => archivos.Items.IndexOf(x)).Where(i => i >= 0).Order()];
                     if (confiar.IsChecked == true) Confiar(o);
                     await AceptarAsync(o, elegidos, "Recibiendo…");
                 }
@@ -550,7 +557,7 @@ public sealed partial class MainWindow : Window
     private void Mostrar_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.Tag is not Transferencia { Mostrar: { } ruta }) return;
-        Process.Start(new ProcessStartInfo("explorer.exe") { ArgumentList = { "/select," + ruta } });
+        Plataforma.Mostrar(ruta);
     }
 
     // ---------- Ajustes ----------
@@ -658,6 +665,9 @@ public sealed partial class MainWindow : Window
     // ---------- Para la autoprueba ----------
 
     internal Beam? Red => _beam;
+
+    /// <summary>Solo autoprueba: en vez de esperar al usuario, cambia la selección del diálogo de una oferta y la acepta.</summary>
+    internal Action<ListView>? ElegirEnPrueba { get; set; }
     internal Ajustes AjustesActuales => _ajustes;
 
     internal void AnadirConfianza(string clave, string billete, string alias)

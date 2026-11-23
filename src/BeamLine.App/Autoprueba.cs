@@ -21,7 +21,7 @@ internal static class Autoprueba
         {
             Beam app = v.Red ?? throw new InvalidOperationException("la app no abrió su red");
             TaskCompletionSource<Fin> finProbador = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            await using Beam probador = await Beam.AbrirAsync(Path.Combine(AppContext.BaseDirectory, "beamline-red.exe"),
+            await using Beam probador = await Beam.AbrirAsync(Path.Combine(AppContext.BaseDirectory, Plataforma.Red),
                 new OpcionesEquipo(Dathinel.Sala.Identidad.Nueva(), "probador", Path.Combine(dir, "almacen"), new OpcionesRed("ninguno", Mdns: false)), b =>
                 {
                     b.Termino += f => finProbador.TrySetResult(f);
@@ -55,7 +55,7 @@ internal static class Autoprueba
             // 3. A dos a la vez: se marca otro probador además del primero y se envían 6 MB a los dos (fase 3).
             TaskCompletionSource<Fin> finOtro = new(TaskCreationOptions.RunContinuationsAsynchronously);
             finProbador = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            await using Beam otro = await Beam.AbrirAsync(Path.Combine(AppContext.BaseDirectory, "beamline-red.exe"),
+            await using Beam otro = await Beam.AbrirAsync(Path.Combine(AppContext.BaseDirectory, Plataforma.Red),
                 new OpcionesEquipo(Dathinel.Sala.Identidad.Nueva(), "probador 2", Path.Combine(dir, "almacen-2"), new OpcionesRed("ninguno", Mdns: false)), b =>
                 {
                     b.Termino += f => finOtro.TrySetResult(f);
@@ -73,7 +73,21 @@ internal static class Autoprueba
                 && (await File.ReadAllBytesAsync(Path.Combine(dir, "recibido", "a-dos.bin"))).AsSpan().SequenceEqual(grande)
                 && (await File.ReadAllBytesAsync(Path.Combine(dir, "recibido-2", "a-dos.bin"))).AsSpan().SequenceEqual(grande);
             lineas.Add($"a dos a la vez (6 MB, reparto entre receptores): {(dosOk ? "ok" : $"fallo {f1.Error} {f2.Error}")}");
-            ok = idaOk && vueltaOk && dosOk;
+
+            // 4. Un equipo que no es de confianza ofrece dos archivos: sale el diálogo, se desmarca el primero y se acepta.
+            await using Beam extrano = await Beam.AbrirAsync(Path.Combine(AppContext.BaseDirectory, Plataforma.Red),
+                new OpcionesEquipo(Dathinel.Sala.Identidad.Nueva(), "extraño", Path.Combine(dir, "almacen-3"), new OpcionesRed("ninguno", Mdns: false)));
+            TaskCompletionSource<Fin> finExtrano = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            extrano.Termino += f => finExtrano.TrySetResult(f);
+            await File.WriteAllTextAsync(Path.Combine(dir, "uno.txt"), "uno");
+            await File.WriteAllTextAsync(Path.Combine(dir, "dos.txt"), "dos");
+            v.ElegirEnPrueba = l => l.SelectedItems.Remove(l.Items[0]);
+            await extrano.OfrecerAsync(app.Billete, [new ArchivoAEnviar(Path.Combine(dir, "uno.txt"), "uno.txt"), new ArchivoAEnviar(Path.Combine(dir, "dos.txt"), "dos.txt")]);
+            Fin f4 = await Esperar(finExtrano.Task, "diálogo");
+            string carpetaApp = v.AjustesActuales.Carpeta;
+            bool dialogoOk = f4.Ok && File.Exists(Path.Combine(carpetaApp, "dos.txt")) && !File.Exists(Path.Combine(carpetaApp, "uno.txt"));
+            lineas.Add($"diálogo de oferta (desmarcar uno y aceptar): {(dialogoOk ? "ok" : "fallo " + f4.Error)}");
+            ok = idaOk && vueltaOk && dosOk && dialogoOk;
         }
 #pragma warning disable CA1031 // la autoprueba deja cualquier fallo escrito
         catch (Exception ex)
