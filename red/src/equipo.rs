@@ -42,13 +42,14 @@ use crate::{billete, nombres};
 pub const ALPN: &[u8] = b"beamline/1";
 pub const MAX_ARCHIVOS: usize = 4096;
 const MAX_PENDIENTES: usize = 4;
+const MAX_POR_PAR: usize = 2;
 const OFERTAS_POR_MINUTO: usize = 10;
 const TRANSFERENCIAS: usize = 4;
 const AVANCE: Duration = Duration::from_millis(250);
 const MAX_EVENTOS: usize = 4096;
 const ESPERA_CONEXION: Duration = Duration::from_secs(30);
 const RESERVA_DIAS: u64 = 7;
-/// Una transferencia sin un byte servido en este tiempo se da por perdida y suelta su turno.
+/// Sin avanzar en este tiempo se da la transferencia por perdida y se suelta su turno.
 const INACTIVIDAD: Duration = Duration::from_secs(600);
 
 /// Códigos de cierre de la conexión `beamline/1`.
@@ -90,7 +91,7 @@ struct Archivo {
 
 enum Respuesta {
     Rechazar,
-    Aceptar(Vec<usize>, PathBuf),
+    Aceptar(Vec<usize>, PathBuf, Recepcion),
 }
 
 struct Pendiente {
@@ -110,14 +111,17 @@ struct Interno {
     alias: String,
     tamano_max: u64,
     espera_respuesta: Duration,
-    eventos: Mutex<VecDeque<Value>>,
+    eventos: Mutex<ColaEventos>,
     hay_eventos: Notify,
     siguiente: AtomicU64,
     /// Envíos y recepciones en curso, y ofertas recibidas sin responder.
     activos: Mutex<HashMap<u64, CancellationToken>>,
     pendientes: Mutex<HashMap<u64, Pendiente>>,
     /// Qué huellas puede pedir cada equipo, y para qué envío (docs/protocolo.md §3).
-    permisos: Mutex<HashMap<EndpointId, HashMap<Hash, u64>>>,
+    permisos: Mutex<HashMap<EndpointId, HashMap<Hash, HashSet<u64>>>>,
+    admision: Mutex<HashMap<EndpointId, usize>>,
+    comprometido: Arc<Mutex<u64>>,
+    inactividad: Duration,
     /// Bytes servidos por envío y huella, del registro de iroh-blobs.
     servidos: Mutex<HashMap<u64, HashMap<Hash, u64>>>,
     cercanos: Mutex<HashMap<EndpointId, String>>,
@@ -140,6 +144,10 @@ fn ahora() -> u64 {
 
 impl Equipo {
     pub async fn abrir(c: Config) -> Result<Self, Fallo> {
+        Self::abrir_con_plazo(c, INACTIVIDAD).await
+    }
+
+    async fn abrir_con_plazo(c: Config, inactividad: Duration) -> Result<Self, Fallo> {
         if c.alias.trim().is_empty() || c.alias.chars().count() > 64 || c.alias.len() > 240 {
             return fallo(
                 "invalid-parameters",
@@ -232,6 +240,9 @@ impl Equipo {
                 tamano_max: c.tamano_max,
                 espera_respuesta: c.espera_respuesta,
                 eventos: Mutex::default(),
+                admision: Mutex::default(),
+                comprometido: Arc::default(),
+                inactividad,
                 hay_eventos: Notify::new(),
                 siguiente: AtomicU64::new(1),
                 activos: Mutex::default(),
@@ -251,6 +262,16 @@ impl Equipo {
             tokio::spawn(e.clone().vigilar_cercanos(m));
         }
         e.limpiar_reservas_viejas().await;
+        let limpieza = e.clone();
+        tokio::spawn(async move {
+            let mut reloj = tokio::time::interval(c.limpieza.max(Duration::from_millis(10)));
+            loop {
+                tokio::select! {
+                    _ = reloj.tick() => limpieza.limpiar_reservas_viejas().await,
+                    _ = limpieza.0.cerrar.cancelled() => break,
+                }
+            }
+        });
         Ok(e)
     }
 
@@ -295,11 +316,7 @@ impl Equipo {
 
     fn emitir(&self, ev: Value) {
         let mut cola = self.0.eventos.lock().unwrap();
-        // Con la cola llena se pierde antes un avance que un fin.
-        if cola.len() >= MAX_EVENTOS && ev["type"] == "avance" {
-            return;
-        }
-        cola.push_back(ev);
+        cola.emitir(ev);
         drop(cola);
         self.0.hay_eventos.notify_one();
     }
@@ -311,8 +328,8 @@ impl Equipo {
             let aviso = self.0.hay_eventos.notified();
             {
                 let mut cola = self.0.eventos.lock().unwrap();
-                if !cola.is_empty() {
-                    return cola.drain(..).collect();
+                if !cola.cola.is_empty() {
+                    return cola.cola.drain(..).collect();
                 }
             }
             tokio::select! {
@@ -326,6 +343,68 @@ impl Equipo {
 
     fn nuevo_id(&self) -> u64 {
         self.0.siguiente.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn reservar_eventos(&self, id: u64) -> Option<EventosReservados> {
+        self.0
+            .eventos
+            .lock()
+            .unwrap()
+            .reservar(id)
+            .then(|| EventosReservados(self.clone(), id))
+    }
+
+    fn admitir(&self, de: EndpointId) -> Option<Admision> {
+        let mut a = self.0.admision.lock().unwrap();
+        if a.values().sum::<usize>() >= MAX_PENDIENTES
+            || a.get(&de).copied().unwrap_or(0) >= MAX_POR_PAR
+        {
+            return None;
+        }
+        *a.entry(de).or_default() += 1;
+        Some(Admision(self.clone(), de))
+    }
+
+    fn revocar(&self, id: u64) {
+        self.0.permisos.lock().unwrap().retain(|_, hashes| {
+            hashes.retain(|_, envios| {
+                envios.remove(&id);
+                !envios.is_empty()
+            });
+            !hashes.is_empty()
+        });
+    }
+
+    fn autorizar(&self, de: EndpointId, id: u64, hashes: impl Iterator<Item = Hash>) {
+        let mut p = self.0.permisos.lock().unwrap();
+        let permisos = p.entry(de).or_default();
+        for hash in hashes {
+            permisos.entry(hash).or_default().insert(id);
+        }
+        self.0.servidos.lock().unwrap().insert(id, HashMap::new());
+    }
+
+    fn progreso_servido(&self, de: EndpointId, hash: Hash, bytes: u64) {
+        let permisos = self.0.permisos.lock().unwrap();
+        if let Some(envios) = permisos.get(&de).and_then(|h| h.get(&hash)) {
+            let mut servidos = self.0.servidos.lock().unwrap();
+            for id in envios {
+                if let Some(s) = servidos.get_mut(id) {
+                    let n = s.entry(hash).or_default();
+                    *n = (*n).max(bytes);
+                }
+            }
+        }
+    }
+
+    fn retirar(&self, id: u64, respuesta: &mut oneshot::Receiver<Respuesta>) -> Option<Respuesta> {
+        let retirada = self.0.pendientes.lock().unwrap().remove(&id).is_some();
+        if retirada {
+            self.emitir(json!({"type": "oferta-retirada", "oferta": id}));
+            None
+        } else {
+            respuesta.try_recv().ok()
+        }
     }
 
     // ---------- Enviar ----------
@@ -371,16 +450,19 @@ impl Equipo {
             }
         }
         let id = self.nuevo_id();
+        let eventos = self.reservar_eventos(id).ok_or(Fallo(
+            "busy",
+            "La app debe recoger los eventos pendientes.".into(),
+        ))?;
         let cancelar = self.0.cerrar.child_token();
         self.0.activos.lock().unwrap().insert(id, cancelar.clone());
         let e = self.clone();
         tokio::spawn(async move {
+            let _eventos = eventos;
             let r = e.enviar(id, destino, archivos, &cancelar).await;
             e.0.activos.lock().unwrap().remove(&id);
             e.0.servidos.lock().unwrap().remove(&id);
-            for hashes in e.0.permisos.lock().unwrap().values_mut() {
-                hashes.retain(|_, envio| *envio != id);
-            }
+            e.revocar(id);
             e.emitir(match r {
                 Ok(()) => json!({"type": "fin", "id": id, "ok": true}),
                 Err(error) => json!({"type": "fin", "id": id, "ok": false, "error": error}),
@@ -505,14 +587,11 @@ impl Equipo {
             _ = cancelar.cancelled() => return Err("cancelado"),
         };
         let total: u64 = aceptados.iter().map(|&i| archivos[i].tamano).sum();
-        {
-            let mut p = self.0.permisos.lock().unwrap();
-            let de = p.entry(conn.remote_id()).or_default();
-            for &i in &aceptados {
-                de.insert(archivos[i].hash, id);
-            }
-            self.0.servidos.lock().unwrap().insert(id, HashMap::new());
-        }
+        self.autorizar(
+            conn.remote_id(),
+            id,
+            aceptados.iter().map(|&i| archivos[i].hash),
+        );
         // Con turno y permisos listos, el otro ya puede pedir los datos.
         escribir(&mut tx, &json!({"type": "listo"}))
             .await
@@ -578,6 +657,7 @@ impl Equipo {
                 }
                 ProviderMessage::GetRequestReceived(mut m) => {
                     let hash = m.request.hash;
+                    let par = conexiones.get(&m.connection_id).copied();
                     let envio = conexiones
                         .get(&m.connection_id)
                         .filter(|_| m.request.ranges.is_blob())
@@ -587,19 +667,18 @@ impl Equipo {
                                 .lock()
                                 .unwrap()
                                 .get(id)
-                                .and_then(|h| h.get(&hash).copied())
+                                .and_then(|h| h.get(&hash).cloned())
                         });
-                    m.tx.send(envio.map(|_| ()).ok_or(AbortReason::Permission))
+                    m.tx.send(envio.as_ref().map(|_| ()).ok_or(AbortReason::Permission))
                         .await
                         .ok();
-                    if let Some(envio) = envio {
+                    if envio.is_some() {
+                        let de = par.expect("petición autorizada");
                         let e = self.clone();
                         tokio::spawn(async move {
                             while let Ok(Some(u)) = m.rx.recv().await {
-                                if let RequestUpdate::Progress(p) = u
-                                    && let Some(s) = e.0.servidos.lock().unwrap().get_mut(&envio)
-                                {
-                                    s.insert(hash, p.end_offset);
+                                if let RequestUpdate::Progress(p) = u {
+                                    e.progreso_servido(de, hash, p.end_offset);
                                 }
                             }
                         });
@@ -645,11 +724,12 @@ impl Equipo {
                 }
             }
             let total: u64 = indices.iter().map(|&i| p.archivos[i].1).sum();
-            std::fs::create_dir_all(&destino)
+            nombres::preparar(&destino, &p.archivos[indices[0]].0)
                 .map_err(|e| Fallo("disco", format!("No se pudo crear la carpeta: {e}")))?;
             // Exportar con Copy deja una segunda copia en el almacén hasta la próxima limpieza.
             // shortcut: «mismo volumen» es la misma raíz de ruta; en Linux siempre lo es y pide el doble aunque sean discos distintos.
             let mismo = destino.components().next() == self.0.almacen.components().next();
+            let mut comprometido = self.0.comprometido.lock().unwrap();
             for (carpeta, hace_falta) in [
                 (
                     destino.as_path(),
@@ -663,6 +743,7 @@ impl Equipo {
             ] {
                 let libre =
                     fs4::available_space(carpeta).map_err(|e| Fallo("disco", e.to_string()))?;
+                let libre = libre.saturating_sub(*comprometido);
                 if libre < hace_falta {
                     return Err(Fallo(
                         "espacio",
@@ -674,7 +755,26 @@ impl Equipo {
                     ));
                 }
             }
-            Respuesta::Aceptar(indices, destino)
+            let bytes = total
+                .checked_mul(2)
+                .ok_or(Fallo("espacio", "Tamaño fuera de rango.".into()))?;
+            *comprometido = comprometido.checked_add(bytes).ok_or(Fallo(
+                "espacio",
+                "Espacio comprometido fuera de rango.".into(),
+            ))?;
+            Respuesta::Aceptar(
+                indices,
+                destino,
+                Recepcion {
+                    equipo: self.clone(),
+                    id: oferta,
+                    terminada: false,
+                    espacio: Some(Espacio {
+                        bytes,
+                        total: self.0.comprometido.clone(),
+                    }),
+                },
+            )
         };
         let p = pend.remove(&oferta).expect("comprobada arriba");
         if matches!(respuesta, Respuesta::Aceptar(..)) {
@@ -684,17 +784,25 @@ impl Equipo {
                 .unwrap()
                 .insert(oferta, p.cancelar.clone());
         }
-        let _ = p.responder.send(respuesta);
+        if let Err(mut respuesta) = p.responder.send(respuesta) {
+            if let Respuesta::Aceptar(_, _, r) = &mut respuesta {
+                r.terminada = true;
+            }
+            self.0.activos.lock().unwrap().remove(&oferta);
+            return fallo("desconocido", "La oferta ya se retiró.");
+        }
         Ok(())
     }
 
     pub fn cancelar(&self, id: u64) -> Result<(), Fallo> {
+        let mut pendientes = self.0.pendientes.lock().unwrap();
         if let Some(t) = self.0.activos.lock().unwrap().get(&id) {
             t.cancel();
             return Ok(());
         }
-        if self.0.pendientes.lock().unwrap().contains_key(&id) {
-            return self.responder(id, Vec::new(), None);
+        if let Some(p) = pendientes.remove(&id) {
+            let _ = p.responder.send(Respuesta::Rechazar);
+            return Ok(());
         }
         fallo("desconocido", "No hay ningún envío ni oferta con ese id.")
     }
@@ -721,6 +829,7 @@ impl Equipo {
 
     async fn atender_oferta(&self, conn: Connection) {
         let de = conn.remote_id();
+        let admision = self.admitir(de);
         if !self.admitir_ritmo(de) {
             conn.close(VarInt::from_u32(cierre::RITMO), b"");
             return;
@@ -729,6 +838,13 @@ impl Equipo {
             tokio::time::timeout(ESPERA_CONEXION, conn.accept_bi()).await
         else {
             conn.close(VarInt::from_u32(cierre::MARCO), b"");
+            return;
+        };
+        let id = self.nuevo_id();
+        let eventos = self.reservar_eventos(id);
+        let (Some(admision), Some(_eventos)) = (admision, eventos) else {
+            let _ = escribir(&mut tx, &json!({"type": "ocupado"})).await;
+            let _ = tokio::time::timeout(Duration::from_secs(5), conn.closed()).await;
             return;
         };
         let leido = tokio::time::timeout(
@@ -756,8 +872,7 @@ impl Equipo {
             let _ = tokio::time::timeout(Duration::from_secs(5), conn.closed()).await;
             return;
         }
-        let id = self.nuevo_id();
-        let (responder, respuesta) = oneshot::channel();
+        let (responder, mut respuesta) = oneshot::channel();
         let cancelar = self.0.cerrar.child_token();
         let lleno = {
             let mut pend = self.0.pendientes.lock().unwrap();
@@ -789,21 +904,19 @@ impl Equipo {
         self.emitir(json!({"type": "oferta", "oferta": id, "de": de.to_string(), "alias": alias, "archivos": lista, "total": total}));
 
         let mut uno = [0u8; 1];
-        let respuesta = tokio::select! {
-            r = respuesta => r.ok(),
-            _ = tokio::time::sleep(self.0.espera_respuesta) => None,
-            _ = tokio::io::AsyncReadExt::read(&mut rx, &mut uno) => None,
-            _ = self.0.cerrar.cancelled() => None,
+        let elegida = tokio::select! {
+            r = &mut respuesta => r.ok(),
+            _ = tokio::time::sleep(self.0.espera_respuesta) => self.retirar(id, &mut respuesta),
+            _ = tokio::io::AsyncReadExt::read(&mut rx, &mut uno) => self.retirar(id, &mut respuesta),
+            _ = self.0.cerrar.cancelled() => self.retirar(id, &mut respuesta),
         };
-        let Some(respuesta) = respuesta else {
-            if self.0.pendientes.lock().unwrap().remove(&id).is_some() {
-                self.emitir(json!({"type": "oferta-retirada", "oferta": id}));
-            }
+        drop(admision);
+        let Some(respuesta) = elegida else {
             let _ = escribir(&mut tx, &json!({"type": "respuesta", "aceptados": []})).await;
             conn.close(VarInt::from_u32(cierre::CERRADO), b"");
             return;
         };
-        let Respuesta::Aceptar(indices, destino) = respuesta else {
+        let Respuesta::Aceptar(indices, destino, mut recepcion) = respuesta else {
             let _ = escribir(&mut tx, &json!({"type": "respuesta", "aceptados": []})).await;
             let _ = tokio::time::timeout(Duration::from_secs(5), conn.closed()).await;
             return;
@@ -813,14 +926,20 @@ impl Equipo {
             r = self.recibir_aceptada(id, de, &mut tx, &mut rx, &indices, &elegidos, &destino, &cancelar) => r,
             _ = conn.closed() => Err(if conn.close_reason().is_some_and(|r| es_cancelado(&r)) { "cancelado" } else { "red" }),
         };
+        if r == Err("cancelado") || cancelar.is_cancelled() {
+            for a in &elegidos {
+                self.liberar_reservas(a.hash).await;
+            }
+        }
+        drop(recepcion.espacio.take());
         self.0.activos.lock().unwrap().remove(&id);
         let fin = match &r {
             Ok(_) => json!({"type": "fin", "ok": true}),
             Err(e) => json!({"type": "fin", "ok": false, "error": e}),
         };
-        let _ = escribir(&mut tx, &fin).await;
+        let _ = tokio::time::timeout(ESPERA_CONEXION, escribir(&mut tx, &fin)).await;
         let _ = tx.finish();
-        self.emitir(match r {
+        recepcion.terminar(match r {
             Ok(rutas) => json!({"type": "fin", "id": id, "ok": true, "rutas": rutas}),
             Err(e) => json!({"type": "fin", "id": id, "ok": false, "error": e}),
         });
@@ -848,7 +967,7 @@ impl Equipo {
             .await
             .map_err(|_| "red")?;
         let listo = tokio::select! {
-            m = marco::leer(rx, 4096, marco::MAX_PROFUNDIDAD_PAR) => m.map_err(|_| "red")?,
+            m = tokio::time::timeout(self.0.inactividad, marco::leer(rx, 4096, marco::MAX_PROFUNDIDAD_PAR)) => m.map_err(|_| "red")?.map_err(|_| "red")?,
             _ = cancelar.cancelled() => return Err("cancelado"),
         };
         if listo["type"] != "listo" {
@@ -870,14 +989,21 @@ impl Equipo {
         let mut rutas = Vec::new();
         let mut ultimo = Instant::now() - AVANCE;
         for a in archivos {
-            let mut ya = destino.to_path_buf();
-            ya.extend(a.nombre.split('/'));
-            if igual(&ya, a) {
+            let base = nombres::preparar(destino, &a.nombre).map_err(|_| "disco")?;
+            if let Some(ya) = existente(&base, a).map_err(|_| "disco")? {
+                self.liberar_reservas(a.hash).await;
                 hecho += a.tamano;
                 rutas.push(ya.to_string_lossy().into_owned());
                 continue;
             }
             // La reserva protege lo bajado de la limpieza: si se corta la red, la próxima oferta igual reanuda.
+            let _proteccion = self
+                .0
+                .store
+                .tags()
+                .temp_tag(a.hash)
+                .await
+                .map_err(|_| "disco")?;
             let reserva = format!("rx/{}/{}", a.hash.to_hex(), ahora());
             self.0
                 .store
@@ -888,33 +1014,30 @@ impl Equipo {
             let r = self
                 .bajar_uno(id, de, a, hecho, total, &mut ultimo, cancelar)
                 .await;
-            if r == Err("cancelado") {
-                let _ = self.0.store.tags().delete(&reserva).await;
+            if matches!(r, Err("cancelado" | "tamano")) {
+                self.liberar_reservas(a.hash).await;
             }
-            r?;
+            r.map_err(|e| if e == "tamano" { "red" } else { e })?;
             let ruta = nombres::ruta_libre(destino, &a.nombre).map_err(|_| "disco")?;
-            let mut parte = ruta.clone().into_os_string();
-            parte.push(".beamline-parte");
-            let parte = Temporal(Some(PathBuf::from(parte)));
-            let ruta_parte = parte.0.clone().expect("recién creada");
-            // shortcut: Copy duplica en disco lo bajado hasta la próxima limpieza; con TryReference no, pero el almacén quedaría apuntando al archivo del usuario.
+            // El nombre del temporal se reserva en exclusiva y después iroh-blobs exporta encima (su copia es
+            // bastante más rápida que leer el blob a mano: «cinco a la vez» pasaba de 117 s a 171 s).
+            let (parte, archivo) =
+                Temporal::crear(ruta.parent().unwrap(), id).map_err(|_| "disco")?;
+            drop(archivo);
+            // shortcut: Copy duplica en disco lo bajado hasta la próxima limpieza del almacén.
             let exportar = self.0.store.blobs().export_with_opts(ExportOptions {
                 hash: a.hash,
                 mode: ExportMode::Copy,
-                target: ruta_parte.clone(),
+                target: parte.0.clone(),
             });
             tokio::select! {
                 r = exportar.finish() => { r.map_err(|_| "disco")?; }
                 _ = cancelar.cancelled() => return Err("cancelado"),
             }
-            let ruta = if ruta.exists() {
-                nombres::ruta_libre(destino, &a.nombre).map_err(|_| "disco")?
-            } else {
-                ruta
-            };
-            std::fs::rename(&ruta_parte, &ruta).map_err(|_| "disco")?;
-            parte.soltar();
-            let _ = self.0.store.tags().delete(&reserva).await;
+            let ruta = parte
+                .publicar(destino, &a.nombre, ruta)
+                .map_err(|_| "disco")?;
+            self.liberar_reservas(a.hash).await;
             hecho += a.tamano;
             rutas.push(ruta.to_string_lossy().into_owned());
         }
@@ -933,20 +1056,36 @@ impl Equipo {
         ultimo: &mut Instant,
         cancelar: &CancellationToken,
     ) -> Result<(), &'static str> {
+        if cancelar.is_cancelled() {
+            return Err("cancelado");
+        }
         let descarga = self
             .0
             .store
             .downloader(self.0.router.endpoint())
             .download(a.hash, Some(de));
-        let mut s = descarga.stream().await.map_err(|_| "red")?;
+        let mut s = tokio::time::timeout(self.0.inactividad, descarga.stream())
+            .await
+            .map_err(|_| "red")?
+            .map_err(|_| "red")?;
+        let mut hasta = tokio::time::Instant::now() + self.0.inactividad;
+        let mut recibido = 0;
         loop {
             let item = tokio::select! {
                 i = s.next() => i,
+                _ = tokio::time::sleep_until(hasta) => return Err("red"),
                 _ = cancelar.cancelled() => return Err("cancelado"),
             };
             match item {
                 None => break,
                 Some(DownloadProgressItem::Progress(n)) => {
+                    if n > a.tamano {
+                        return Err("tamano");
+                    }
+                    if n > recibido {
+                        recibido = n;
+                        hasta = tokio::time::Instant::now() + self.0.inactividad;
+                    }
                     if ultimo.elapsed() >= AVANCE {
                         *ultimo = Instant::now();
                         self.emitir(json!({"type": "avance", "id": id, "bytes": (antes + n).min(total), "total": total}));
@@ -965,10 +1104,22 @@ impl Equipo {
             .local(a.hash)
             .await
             .map_err(|_| "disco")?;
+        if local.local_bytes() > a.tamano {
+            return Err("tamano");
+        }
         if !local.is_complete() || local.local_bytes() != a.tamano {
             return Err("red");
         }
         Ok(())
+    }
+
+    async fn liberar_reservas(&self, hash: Hash) {
+        let _ = self
+            .0
+            .store
+            .tags()
+            .delete_prefix(format!("rx/{}/", hash.to_hex()))
+            .await;
     }
 
     /// Las reservas de más de una semana ya no se van a reanudar.
@@ -1022,21 +1173,191 @@ impl Equipo {
     }
 }
 
-/// Un `.beamline-parte` que se borra solo si no llega a renombrarse (error, cancelación o corte).
-struct Temporal(Option<PathBuf>);
+#[derive(Default)]
+struct ColaEventos {
+    cola: VecDeque<Value>,
+    reservas: HashMap<u64, usize>,
+}
 
-impl Temporal {
-    fn soltar(mut self) {
-        self.0 = None;
+impl ColaEventos {
+    fn ocupados(&self) -> usize {
+        self.cola.len() + self.reservas.values().sum::<usize>()
+    }
+
+    fn reservar(&mut self, id: u64) -> bool {
+        if self.ocupados() + 2 > MAX_EVENTOS {
+            return false;
+        }
+        self.reservas.insert(id, 2);
+        true
+    }
+
+    fn emitir(&mut self, ev: Value) {
+        let tipo = ev["type"].as_str().unwrap_or("");
+        if matches!(tipo, "fin" | "oferta" | "respuesta" | "oferta-retirada") {
+            let id = ev["id"]
+                .as_u64()
+                .or_else(|| ev["oferta"].as_u64())
+                .or_else(|| ev["envio"].as_u64())
+                .unwrap();
+            let reserva = self.reservas.get_mut(&id).expect("operación admitida");
+            assert!(*reserva > 0);
+            *reserva -= 1;
+        } else if self.ocupados() >= MAX_EVENTOS {
+            return;
+        }
+        self.cola.push_back(ev);
     }
 }
 
-impl Drop for Temporal {
+struct EventosReservados(Equipo, u64);
+impl Drop for EventosReservados {
     fn drop(&mut self) {
-        if let Some(p) = &self.0 {
-            let _ = std::fs::remove_file(p);
+        self.0.0.eventos.lock().unwrap().reservas.remove(&self.1);
+    }
+}
+
+struct Admision(Equipo, EndpointId);
+impl Drop for Admision {
+    fn drop(&mut self) {
+        let mut a = self.0.0.admision.lock().unwrap();
+        if let Some(n) = a.get_mut(&self.1) {
+            *n -= 1;
+            if *n == 0 {
+                a.remove(&self.1);
+            }
         }
     }
+}
+
+struct Espacio {
+    bytes: u64,
+    total: Arc<Mutex<u64>>,
+}
+
+struct Recepcion {
+    equipo: Equipo,
+    id: u64,
+    espacio: Option<Espacio>,
+    terminada: bool,
+}
+
+impl Recepcion {
+    fn terminar(mut self, evento: Value) {
+        self.equipo.emitir(evento);
+        self.terminada = true;
+    }
+}
+
+impl Drop for Recepcion {
+    fn drop(&mut self) {
+        self.equipo.0.activos.lock().unwrap().remove(&self.id);
+        if !self.terminada {
+            self.equipo
+                .emitir(json!({"type": "fin", "id": self.id, "ok": false, "error": "cancelado"}));
+        }
+    }
+}
+impl Drop for Espacio {
+    fn drop(&mut self) {
+        *self.total.lock().unwrap() -= self.bytes;
+    }
+}
+
+struct Temporal(PathBuf);
+impl Temporal {
+    fn crear(padre: &Path, id: u64) -> std::io::Result<(Self, std::fs::File)> {
+        static SECUENCIA: AtomicU64 = AtomicU64::new(0);
+        loop {
+            let n = SECUENCIA.fetch_add(1, Ordering::Relaxed);
+            let ruta = padre.join(format!(".beamline-{id}-{n}.beamline-parte"));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&ruta)
+            {
+                Ok(f) => return Ok((Self(ruta), f)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    fn publicar(self, destino: &Path, nombre: &str, mut ruta: PathBuf) -> std::io::Result<PathBuf> {
+        loop {
+            nombres::preparar(destino, nombre)?;
+            nombres::comprobar_enlace(&ruta)?;
+            match publicar_sin_pisar(&self.0, &ruta) {
+                Ok(()) => return Ok(ruta),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    ruta = nombres::ruta_libre(destino, nombre)?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+impl Drop for Temporal {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(windows)]
+fn publicar_sin_pisar(origen: &Path, destino: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(origen: *const u16, destino: *const u16, flags: u32) -> i32;
+    }
+    let origen: Vec<u16> = origen.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destino: Vec<u16> = destino.as_os_str().encode_wide().chain(Some(0)).collect();
+    // Rutas terminadas en cero y sin MOVEFILE_REPLACE_EXISTING, también en FAT/exFAT.
+    if unsafe { MoveFileExW(origen.as_ptr(), destino.as_ptr(), 0) } != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(windows))]
+fn publicar_sin_pisar(origen: &Path, destino: &Path) -> std::io::Result<()> {
+    std::fs::hard_link(origen, destino)
+}
+
+fn existente(base: &Path, a: &Archivo) -> std::io::Result<Option<PathBuf>> {
+    if igual(base, a) {
+        return Ok(Some(base.to_path_buf()));
+    }
+    let tallo = base.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = base
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let prefijo = format!("{tallo} (");
+    let sufijo = format!("){ext}");
+    let mut candidatos = Vec::new();
+    for entrada in std::fs::read_dir(base.parent().unwrap())? {
+        let entrada = entrada?;
+        let nombre = entrada.file_name();
+        let nombre = nombre.to_string_lossy();
+        if let Some(n) = nombre
+            .strip_prefix(&prefijo)
+            .and_then(|s| s.strip_suffix(&sufijo))
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|n| *n >= 2)
+        {
+            candidatos.push((n, entrada.path()));
+        }
+    }
+    candidatos.sort_by_key(|(n, _)| *n);
+    for (_, ruta) in candidatos {
+        nombres::comprobar_enlace(&ruta)?;
+        if igual(&ruta, a) {
+            return Ok(Some(ruta));
+        }
+    }
+    Ok(None)
 }
 
 /// El archivo ya está en destino con el mismo contenido (una oferta repetida tras un corte).
@@ -1119,3 +1440,6 @@ impl ProtocolHandler for Ofertas {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod pruebas;
