@@ -1,21 +1,43 @@
 # BeamLine (nombre provisional)
 
-App de envío de archivos tipo LocalSend que también funciona por internet: iroh + iroh-blobs. **Privada y sin remoto hasta terminarla** (Daniel, 22-nov). Licencia MIT provisional, porque Daniel no la eligió. El nombre está por decidir: Daniel propuso File Send, BeamLine Send y Skybridge Transfer; antes de publicar hay que revisar la marca.
+App de envío de archivos tipo LocalSend que también funciona por internet: iroh + iroh-blobs.
+- **Privada y sin remoto hasta terminarla** (Daniel, 22-nov).
+- Licencia MIT provisional: Daniel no la ha elegido.
+- Nombre por decidir: Daniel propuso File Send, BeamLine Send y Skybridge Transfer. Antes de publicar hay que revisar la marca.
+
+## Cómo está hecho
+
+- `red\`: el proceso `beamline-red` en Rust. El núcleo está en `src\equipo.rs`. Habla el protocolo de módulos con la biblioteca de `Sala\red`, que entró en Sala con el PR #26, sin copiarla.
+- `src\BeamLine.Nucleo\`: el cliente en C# (`Beam`). La identidad (DPAPI) viene de `Dathinel.Sala`.
+- El contrato está en `docs\protocolo.md`.
+- Entorno: `. build\entorno.ps1`. Por ahora usa el `.entorno` de la copia de trabajo de Sala.
+- Pruebas:
+  - Rust: `cd red; cargo test`. Hay 14: 5 unitarias y 9 de punta a punta, que incluyen las hostiles y mDNS.
+  - C#: `dotnet test BeamLine.slnx`. Hay 5, y 4 de ellas usan dos procesos reales.
+  - No hay CI porque no hay remoto.
 
 ## Estado
 
-- Plan aprobado el 22-nov (`docs/plan.md`). Opción B: proceso propio en Rust con iroh-blobs; Sala entra como submódulo solo por el protocolo de módulos y las piezas de C#. No se toca Sala.
-- **Fase 0:**
-  - La PoC (`poc\`, iroh 1.4.1 igual que Sala, iroh-blobs 0.105) pasa la autoprueba `local` con 5 GiB: corta, reanuda, baja solo lo que falta y la huella coincide.
-  - 22-nov, dos procesos en un solo PC (como Rodaje), con las cifras en `docs/medir-entre-pc.md`:
-    - directa: 134 MiB/s;
-    - relé local: 61 MiB/s, que bajan a 6,7 con 30 ms por tramo;
-    - **relé de n0: 0,044 MiB/s**. Por n0 no pasan archivos: se necesita un relé propio.
-  - Falta la medida entre dos PC reales, y que una de las redes sea otra.
-- Ojo:
-  - el `Progress` del downloader cuenta desde el inicio del blob, incluido lo que ya había;
-  - con `presets::Minimal` hay que dar las direcciones del billete por `MemoryLookup`, o la descarga falla con «Unable to download».
+- Fase 0 (PoC y cifras) cerrada.
+  - Cifras en `docs\medir-entre-pc.md`: directa 134 MiB/s, relé local 61, relé de n0 0,044.
+  - **Por n0 no van archivos.**
+  - Falta medir entre dos PC reales.
+- Fase 1, núcleo sin interfaz (22-nov):
+  - ofertas con aceptar o rechazar por archivo;
+  - solo se sirve lo aceptado a quien lo aceptó;
+  - reanuda tras un corte;
+  - nombres seguros y límites;
+  - mDNS con alias;
+  - cliente en C# con eventos.
+- La revisión de bloque (ChatGPT, solo lectura) está en curso.
+
+Detalles que conviene saber:
+- El `Progress` del downloader cuenta desde el principio del blob, incluido lo que ya había.
+- Con `presets::Minimal`, las direcciones del billete se dan por `MemoryLookup` o por mDNS.
+- El turno de envío se toma al aceptar, no al ofrecer: si no, cuatro ofertas sin respuesta bloquean la quinta.
+- Exportar con `Copy` duplica en disco lo bajado hasta la próxima limpieza del almacén (shortcut anotado en `bajar`).
 
 ## Siguiente paso
 
-Las cifras entre los PC, y después la fase 1: núcleo con ofertas, aceptar o rechazar, carpetas, mDNS, límites y pruebas hostiles.
+1. Aplicar lo que encuentre la revisión de bloque.
+2. Fase 2: interfaz WinUI 3 AOT. Lista de cercanos, arrastrar y soltar, diálogo de aceptar, progreso, QR del billete, favoritos y guardado sin preguntar.
