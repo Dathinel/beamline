@@ -220,3 +220,38 @@ async fn solo_rele_exige_un_rele_propio() {
         assert_eq!(r.err().map(|f| f.0), Some("invalid-parameters"));
     }
 }
+
+/// Con un relé propio y «solo relé» los datos van por él (no se exige ruta directa). Necesita `--features prueba`.
+#[cfg(feature = "prueba")]
+#[tokio::test(flavor = "multi_thread")]
+async fn solo_rele_por_un_rele_propio() {
+    let c = Carpeta::nueva();
+    let (_mapa, url, _servidor) = iroh::test_utils::run_relay_server().await.unwrap();
+    let por_rele = |alias| Config {
+        rele: Rele::Url(url.clone()),
+        solo_rele: true,
+        inseguro: true,
+        ..config(&c.0, alias)
+    };
+    let a = Equipo::abrir(por_rele("ana")).await.unwrap();
+    let b = Equipo::abrir(por_rele("beto")).await.unwrap();
+    let datos = aleatorio(&c.0.join("x.bin"), 2 << 20);
+    let id = a
+        .ofrecer(&b.billete(), vec![(c.0.join("x.bin"), "x.bin".into())])
+        .unwrap();
+    let mut vb = Vec::new();
+    let o = esperar(&b, &mut vb, |ev| ev["type"] == "oferta").await;
+    b.responder(
+        o["oferta"].as_u64().unwrap(),
+        vec![0],
+        Some(c.0.join("destino")),
+    )
+    .unwrap();
+    let mut va = Vec::new();
+    let f = esperar(&a, &mut va, |ev| ev["type"] == "fin" && ev["id"] == id).await;
+    assert_eq!(f["ok"], true, "{f}");
+    assert_eq!(
+        std::fs::read(c.0.join("destino").join("x.bin")).unwrap(),
+        datos
+    );
+}
