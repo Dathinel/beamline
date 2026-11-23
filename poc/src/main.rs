@@ -1,8 +1,8 @@
 //! Prueba de concepto de la fase 0 (docs/plan.md): medir iroh-blobs y comprobar la reanudación.
-use std::{path::{Path, PathBuf}, time::Instant};
+use std::{path::{Path, PathBuf}, sync::OnceLock, time::Instant};
 
 use anyhow::{Context, Result, bail, ensure};
-use iroh::{Endpoint, EndpointAddr, RelayMode, address_lookup::MemoryLookup, endpoint::presets, protocol::Router};
+use iroh::{Endpoint, EndpointAddr, RelayMode, RelayUrl, address_lookup::MemoryLookup, endpoint::presets, protocol::Router};
 use iroh_blobs::{
     BlobFormat, BlobsProtocol, Hash,
     api::{blobs::{AddPathOptions, ImportMode}, downloader::DownloadProgressItem},
@@ -11,9 +11,27 @@ use iroh_blobs::{
 };
 use n0_future::StreamExt;
 
+/// Opciones de red comunes: `--rele <url>`, `--solo-rele` y, solo con `--features prueba`, `--inseguro` para el relé local de Sala.
+#[derive(Default)]
+struct Red {
+    rele: Option<RelayUrl>,
+    solo_rele: bool,
+    inseguro: bool,
+}
+static RED: OnceLock<Red> = OnceLock::new();
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mut red = Red::default();
+    if let Some(i) = args.iter().position(|a| a == "--rele") {
+        red.rele = Some(args.get(i + 1).context("--rele necesita una URL")?.parse()?);
+        args.drain(i..=i + 1);
+    }
+    red.solo_rele = quitar(&mut args, "--solo-rele");
+    red.inseguro = quitar(&mut args, "--inseguro");
+    ensure!(!red.inseguro || cfg!(feature = "prueba"), "--inseguro solo existe con --features prueba");
+    RED.set(red).ok();
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
         ["enviar", archivo, almacen] => enviar(archivo.as_ref(), almacen.as_ref()).await,
@@ -24,6 +42,12 @@ async fn main() -> Result<()> {
             std::process::exit(2)
         }
     }
+}
+
+fn quitar(args: &mut Vec<String>, opcion: &str) -> bool {
+    let antes = args.len();
+    args.retain(|a| a != opcion);
+    args.len() != antes
 }
 
 async fn importar(store: &FsStore, archivo: &Path) -> Result<Hash> {
@@ -46,11 +70,22 @@ async fn endpoint(relay: bool, par: Option<&EndpointAddr>) -> Result<Endpoint> {
     if let Some(p) = par {
         memoria.add_endpoint_info(p.clone());
     }
-    let b = if relay {
-        Endpoint::builder(presets::N0)
+    let red = RED.get_or_init(Red::default);
+    let mut b = if relay {
+        match &red.rele {
+            Some(u) => Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Custom(u.clone().into())),
+            None => Endpoint::builder(presets::N0),
+        }
     } else {
         Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled)
     };
+    if relay && red.solo_rele {
+        b = b.clear_ip_transports();
+    }
+    #[cfg(feature = "prueba")]
+    if red.inseguro {
+        b = b.ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify());
+    }
     Ok(b.address_lookup(memoria).bind().await?)
 }
 
@@ -93,7 +128,7 @@ async fn bajar(store: &FsStore, ep: &Endpoint, billete: &BlobTicket, corte: Opti
     }
     let seg = t.elapsed().as_secs_f64();
     eprintln!(
-        "ya había {:.1} MiB; bajados {:.1} MiB en {seg:.1} s = {:.1} MiB/s ({:.0} Mbit/s)",
+        "ya había {:.1} MiB; bajados {:.1} MiB en {seg:.1} s = {:.2} MiB/s ({:.1} Mbit/s)",
         mib(previos), mib(bajados), mib(bajados) / seg, bajados as f64 * 8.0 / 1e6 / seg
     );
     Ok((previos, bajados))

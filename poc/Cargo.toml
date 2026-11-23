@@ -16,3 +16,6 @@ n0-future = "0.3"
 [profile.release]
 lto = true
 codegen-units = 1
+
+[features]
+prueba = ["iroh/test-utils"]
