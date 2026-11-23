@@ -26,6 +26,8 @@ public sealed class Beam : IAsyncDisposable
     public event Action<Cercano>? CercanoCambio;
     /// <summary>beamline-red dejó de responder: el equipo ya no sirve y hay que abrir otro.</summary>
     public event Action<BeamException>? Caido;
+    /// <summary>Un manejador de los eventos de arriba lanzó: los demás eventos siguen llegando.</summary>
+    public event Action<Exception>? ManejadorFallo;
 
     private Beam(ModuleProcess proceso) => _proceso = proceso;
 
@@ -98,11 +100,12 @@ public sealed class Beam : IAsyncDisposable
     public Task CancelarAsync(long id, CancellationToken ct = default) =>
         LlamarAsync("cancelar", new JsonObject { ["id"] = id }, ct);
 
-    public async Task<IReadOnlyList<Cercano>> CercanosAsync(CancellationToken ct = default)
+    public async Task<Estado> EstadoAsync(CancellationToken ct = default)
     {
         JsonElement r = await LlamarAsync("estado", null, ct).ConfigureAwait(false);
-        return [.. r.GetProperty("cercanos").EnumerateArray().Select(c =>
-            new Cercano(c.GetProperty("clave").GetString()!, c.GetProperty("alias").GetString()!, true))];
+        return new Estado(
+            [.. r.GetProperty("cercanos").EnumerateArray().Select(c => new Cercano(Texto(c, "clave"), Texto(c, "alias"), true))],
+            r.GetProperty("releConectado").GetBoolean());
     }
 
     /// <summary>
@@ -112,6 +115,8 @@ public sealed class Beam : IAsyncDisposable
     public static IReadOnlyList<ArchivoAEnviar> DeCarpeta(string carpeta)
     {
         DirectoryInfo raiz = new(Path.GetFullPath(carpeta));
+        if (raiz.Parent is null)
+            throw new ArgumentException("No se puede enviar una unidad entera; elige una carpeta.", nameof(carpeta));
         string prefijo = raiz.Name;
         List<ArchivoAEnviar> lista = [];
         EnumerationOptions op = new() { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true };
@@ -143,7 +148,12 @@ public sealed class Beam : IAsyncDisposable
                 return;
             }
             foreach (JsonElement ev in r.GetProperty("eventos").EnumerateArray())
-                Despachar(ev);
+            {
+#pragma warning disable CA1031 // un manejador de la interfaz que falla no debe parar los eventos de la red
+                try { Despachar(ev); }
+                catch (Exception ex) { ManejadorFallo?.Invoke(ex); }
+#pragma warning restore CA1031
+            }
         }
     }
 

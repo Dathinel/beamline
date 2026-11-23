@@ -26,6 +26,9 @@ public sealed record Fin(long Id, bool Ok, string? Error, IReadOnlyList<string> 
 
 public sealed record Cercano(string Clave, string Alias, bool Visto);
 
+/// <summary>Equipos cercanos por mDNS y si el relé contesta (sin relé, solo hay conexión directa).</summary>
+public sealed record Estado(IReadOnlyList<Cercano> Cercanos, bool ReleConectado);
+
 /// <summary>Cómo sale a la red: relé «n0», «ninguno» o una URL https; «solo relé» oculta la IP.</summary>
 public sealed record OpcionesRed(string Rele = "n0", bool SoloRele = false, bool Mdns = true);
 

@@ -133,6 +133,34 @@ public sealed class PuntaAPuntaTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Un_manejador_que_falla_no_para_los_eventos()
+    {
+        int fallos = 0;
+        _beto.OfertaRecibida += _ => throw new InvalidOperationException("fallo de la interfaz");
+        _beto.ManejadorFallo += _ => Interlocked.Increment(ref fallos);
+        string f = await ArchivoAsync("a.txt");
+        await _ana.OfrecerAsync(_beto.Billete, [new ArchivoAEnviar(f, "a.txt")]);
+        Oferta o1 = await EsperarAsync<Oferta>(_eventosBeto);
+        await _beto.RechazarAsync(o1.Id);
+        await _ana.OfrecerAsync(_beto.Billete, [new ArchivoAEnviar(f, "a.txt")]);
+        Oferta o2 = await EsperarAsync<Oferta>(_eventosBeto);
+        Assert.NotEqual(o1.Id, o2.Id);
+        Assert.True(fallos >= 2);
+    }
+
+    [Fact]
+    public async Task El_estado_dice_si_hay_rele()
+    {
+        Estado e = await _ana.EstadoAsync();
+        Assert.False(e.ReleConectado); // pruebas sin relé
+        Assert.Empty(e.Cercanos);      // y sin mDNS
+    }
+
+    [Fact]
+    public void No_se_envia_una_unidad_entera() =>
+        Assert.Throws<ArgumentException>(() => Beam.DeCarpeta(Path.GetPathRoot(Path.GetTempPath())!));
+
+    [Fact]
     public async Task Cancelar_una_oferta_pendiente_la_retira_en_el_otro()
     {
         long envio = await _ana.OfrecerAsync(_beto.Billete, [new ArchivoAEnviar(await ArchivoAsync("a.txt"), "a.txt")]);

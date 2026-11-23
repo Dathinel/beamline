@@ -171,10 +171,7 @@ impl Servicio for Red {
                 Ok(json!({"eventos": e.recibir(espera, &cancelar).await}))
             }
             "cerrar" => {
-                let e = self.0.lock().unwrap().take();
-                if let Some(e) = e {
-                    e.cerrar().await;
-                }
+                Servicio::cerrar(self).await;
                 Ok(Value::Null)
             }
             _ => Err(Fallo(

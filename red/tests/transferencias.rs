@@ -58,11 +58,10 @@ async fn esperar(e: &Equipo, vistos: &mut Vec<Value>, f: impl Fn(&Value) -> bool
     let nada = Notify::new();
     let hasta = tokio::time::Instant::now() + Duration::from_secs(60);
     while tokio::time::Instant::now() < hasta {
-        for ev in e.recibir(Duration::from_millis(500), &nada).await {
-            if f(&ev) {
-                return ev;
-            }
-            vistos.push(ev);
+        // Todo el lote a `vistos` antes de buscar: lo que venga detrás del buscado no se pierde.
+        vistos.extend(e.recibir(Duration::from_millis(500), &nada).await);
+        if let Some(i) = vistos.iter().position(&f) {
+            return vistos.remove(i);
         }
     }
     panic!("no llegó el evento; vistos: {vistos:?}");
@@ -216,7 +215,7 @@ async fn rechazar_y_aceptar_una_parte() {
     );
     assert_eq!(archivos_en(&destino), ["y.bin"]);
 
-    // El mismo nombre otra vez no pisa: queda «y (2).bin».
+    // El mismo archivo otra vez: ya está, no se baja ni se duplica.
     let e3 = a.ofrecer(&b.billete(), lista()).unwrap();
     let o = esperar(&b, &mut vb, tipo("oferta")).await;
     b.responder(
@@ -226,6 +225,24 @@ async fn rechazar_y_aceptar_una_parte() {
     )
     .unwrap();
     assert_eq!(esperar(&a, &mut va, fin_de(e3)).await["ok"], true);
+    esperar(&b, &mut vb, fin_de(o["oferta"].as_u64().unwrap())).await;
+    assert_eq!(
+        archivos_en(&destino),
+        ["y.bin"],
+        "el mismo contenido no se duplica"
+    );
+
+    // Mismo nombre con otro contenido: no pisa, queda «y (2).bin».
+    aleatorio(&c.0.join("y.bin"), 200);
+    let e4 = a.ofrecer(&b.billete(), lista()).unwrap();
+    let o = esperar(&b, &mut vb, tipo("oferta")).await;
+    b.responder(
+        o["oferta"].as_u64().unwrap(),
+        vec![1],
+        Some(destino.clone()),
+    )
+    .unwrap();
+    assert_eq!(esperar(&a, &mut va, fin_de(e4)).await["ok"], true);
     esperar(&b, &mut vb, fin_de(o["oferta"].as_u64().unwrap())).await;
     assert_eq!(archivos_en(&destino), ["y (2).bin", "y.bin"]);
     a.cerrar().await;
@@ -562,6 +579,168 @@ async fn los_cercanos_aparecen_con_su_alias_y_se_envia_por_clave() {
     b.responder(o["oferta"].as_u64().unwrap(), vec![0], Some(c.0.join("d")))
         .unwrap();
     assert_eq!(esperar(&a, &mut va, fin_de(e)).await["ok"], true);
+    a.cerrar().await;
+    b.cerrar().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mil_archivos_en_una_oferta() {
+    let c = Carpeta::nueva();
+    let (a, b) = (
+        equipo(&c.0, "ana", 1 << 40).await,
+        equipo(&c.0, "beto", 1 << 40).await,
+    );
+    let origen = c.0.join("muchos");
+    let mut lista = Vec::new();
+    for i in 0..1000 {
+        let r = origen.join(format!("f{i:04}.txt"));
+        aleatorio(&r, 16);
+        lista.push((r, format!("muchos/f{i:04}.txt")));
+    }
+    let (mut va, mut vb) = (Vec::new(), Vec::new());
+    let e = a.ofrecer(&b.billete(), lista).unwrap();
+    let o = esperar(&b, &mut vb, tipo("oferta")).await;
+    let destino = c.0.join("destino");
+    b.responder(
+        o["oferta"].as_u64().unwrap(),
+        (0..1000).collect(),
+        Some(destino.clone()),
+    )
+    .unwrap();
+    assert_eq!(esperar(&a, &mut va, fin_de(e)).await["ok"], true);
+    let fb = esperar(&b, &mut vb, fin_de(o["oferta"].as_u64().unwrap())).await;
+    assert_eq!(fb["rutas"].as_array().unwrap().len(), 1000);
+    assert_eq!(archivos_en(&destino).len(), 1000);
+    a.cerrar().await;
+    b.cerrar().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cinco_transferencias_a_la_vez_esperan_turno_sin_fallar() {
+    let c = Carpeta::nueva();
+    let (a, b) = (
+        equipo(&c.0, "ana", 1 << 40).await,
+        equipo(&c.0, "beto", 1 << 40).await,
+    );
+    let (mut va, mut vb) = (Vec::new(), Vec::new());
+    let mut envios = Vec::new();
+    for i in 0..5 {
+        aleatorio(&c.0.join(format!("g{i}.bin")), 64 << 20);
+    }
+    let ofrecer = |i: usize| {
+        a.ofrecer(
+            &b.billete(),
+            vec![(c.0.join(format!("g{i}.bin")), format!("g{i}.bin"))],
+        )
+        .unwrap()
+    };
+    // Cuatro pendientes (el tope), las cuatro aceptadas a la vez, y la quinta mientras corren.
+    for i in 0..4 {
+        envios.push(ofrecer(i));
+    }
+    let mut ids = Vec::new();
+    for _ in 0..4 {
+        ids.push(
+            esperar(&b, &mut vb, tipo("oferta")).await["oferta"]
+                .as_u64()
+                .unwrap(),
+        );
+    }
+    for &id in &ids {
+        b.responder(id, vec![0], Some(c.0.join("destino"))).unwrap();
+    }
+    envios.push(ofrecer(4));
+    let id = esperar(&b, &mut vb, tipo("oferta")).await["oferta"]
+        .as_u64()
+        .unwrap();
+    b.responder(id, vec![0], Some(c.0.join("destino"))).unwrap();
+    ids.push(id);
+    for (e, id) in envios.into_iter().zip(ids) {
+        let fa = esperar(&a, &mut va, fin_de(e)).await;
+        assert_eq!(fa["ok"], true, "{fa}");
+        assert_eq!(esperar(&b, &mut vb, fin_de(id)).await["ok"], true);
+    }
+    assert_eq!(archivos_en(&c.0.join("destino")).len(), 5);
+    a.cerrar().await;
+    b.cerrar().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reanudar_varios_no_duplica_lo_que_ya_llego() {
+    let c = Carpeta::nueva();
+    let b = equipo(&c.0, "beto", 1 << 40).await;
+    aleatorio(&c.0.join("a.bin"), 1000);
+    aleatorio(&c.0.join("b.bin"), 64 << 20);
+    let lista = || {
+        vec![
+            (c.0.join("a.bin"), "a.bin".to_string()),
+            (c.0.join("b.bin"), "b.bin".to_string()),
+        ]
+    };
+    let destino = c.0.join("destino");
+    let mut vb = Vec::new();
+
+    let a = equipo(&c.0, "ana", 1 << 40).await;
+    a.ofrecer(&b.billete(), lista()).unwrap();
+    let id = esperar(&b, &mut vb, tipo("oferta")).await["oferta"]
+        .as_u64()
+        .unwrap();
+    b.responder(id, vec![0, 1], Some(destino.clone())).unwrap();
+    let mut bytes = 0;
+    while bytes < 1000 + (16 << 20) {
+        bytes = esperar(&b, &mut vb, |e| e["type"] == "avance" && e["id"] == id).await["bytes"]
+            .as_u64()
+            .unwrap();
+    }
+    a.cerrar().await;
+    assert_eq!(esperar(&b, &mut vb, fin_de(id)).await["ok"], false);
+    assert_eq!(archivos_en(&destino), ["a.bin"], "sin restos de la parte");
+
+    let a2 = equipo(&c.0, "ana2", 1 << 40).await;
+    let e = a2.ofrecer(&b.billete(), lista()).unwrap();
+    let id = esperar(&b, &mut vb, tipo("oferta")).await["oferta"]
+        .as_u64()
+        .unwrap();
+    b.responder(id, vec![0, 1], Some(destino.clone())).unwrap();
+    let mut va = Vec::new();
+    assert_eq!(esperar(&a2, &mut va, fin_de(e)).await["ok"], true);
+    let fb = esperar(&b, &mut vb, fin_de(id)).await;
+    assert_eq!(fb["ok"], true);
+    assert_eq!(archivos_en(&destino), ["a.bin", "b.bin"]);
+    assert_eq!(
+        std::fs::read(c.0.join("b.bin")).unwrap(),
+        std::fs::read(destino.join("b.bin")).unwrap()
+    );
+    a2.cerrar().await;
+    b.cerrar().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn si_cancela_el_que_envia_no_quedan_restos() {
+    let c = Carpeta::nueva();
+    let (a, b) = (
+        equipo(&c.0, "ana", 1 << 40).await,
+        equipo(&c.0, "beto", 1 << 40).await,
+    );
+    aleatorio(&c.0.join("g.bin"), 48 << 20);
+    let (mut va, mut vb) = (Vec::new(), Vec::new());
+    let e = a
+        .ofrecer(&b.billete(), vec![(c.0.join("g.bin"), "g.bin".into())])
+        .unwrap();
+    let id = esperar(&b, &mut vb, tipo("oferta")).await["oferta"]
+        .as_u64()
+        .unwrap();
+    let destino = c.0.join("destino");
+    b.responder(id, vec![0], Some(destino.clone())).unwrap();
+    esperar(&b, &mut vb, |ev| ev["type"] == "avance" && ev["id"] == id).await;
+    a.cancelar(e).unwrap();
+    assert_eq!(esperar(&a, &mut va, fin_de(e)).await["error"], "cancelado");
+    assert_eq!(esperar(&b, &mut vb, fin_de(id)).await["error"], "cancelado");
+    assert!(
+        archivos_en(&destino).is_empty(),
+        "{:?}",
+        archivos_en(&destino)
+    );
     a.cerrar().await;
     b.cerrar().await;
 }

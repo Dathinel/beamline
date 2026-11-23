@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 const RESERVADOS: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "COM9", "COM¹", "COM²", "COM³", "CONIN$", "CONOUT$", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
+    "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
 ];
 
 /// Un nombre relativo con `/` es válido en Windows, Linux y macOS y no sube de carpeta.
@@ -75,9 +76,34 @@ mod pruebas {
     fn invalidos() {
         let largo = "x".repeat(256);
         for n in [
-            "", "/a", "a/", "a//b", "..", "../a", "a/../b", "./a", "C:/a", "c:", "a\\b", "a:b",
-            "a\u{0}b", "a\nb", "CON", "con.txt", "Lpt1.log", "nul ", "a.", "a ", "a?", "a*", "a|b",
-            "a<b", &largo,
+            "",
+            "/a",
+            "a/",
+            "a//b",
+            "..",
+            "../a",
+            "a/../b",
+            "./a",
+            "C:/a",
+            "c:",
+            "a\\b",
+            "a:b",
+            "a\u{0}b",
+            "a\nb",
+            "CON",
+            "con.txt",
+            "Lpt1.log",
+            "nul ",
+            "a.",
+            "a ",
+            "a?",
+            "a*",
+            "a|b",
+            "a<b",
+            "CONIN$",
+            "conout$.txt",
+            "COM¹",
+            &largo,
         ] {
             assert!(!valido(n), "{n:?}");
         }

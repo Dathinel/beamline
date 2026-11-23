@@ -12,7 +12,7 @@ Entre los dos se usa el protocolo de módulos v1 de Rodaje y Sala: named pipe, J
 |---|---|---|
 | `abrir` | `identidad` (64 hex, clave **privada**), `alias` (1–64 caracteres), `almacen` (carpeta absoluta del almacén de iroh-blobs), `red` `{rele: "n0"\|"ninguno"\|URL https, soloRele, mdns}`, `tamanoMax`? (bytes que acepta por oferta; por defecto 1 TiB) | `clave` (pública, 64 hex), `billete` |
 | `ofrecer` | `a`: clave de un equipo cercano o billete; `archivos`: lista (1–4096) de `{ruta, nombre}`, donde `ruta` es el archivo local absoluto y `nombre` la ruta relativa que verá el otro con `/` (la app expande las carpetas) | `envio` (u64). Saca las huellas, conecta y ofrece en segundo plano; el resto llega por eventos |
-| `responder` | `oferta` (u64), `aceptar` (índices de `archivos`; vacío o ausente = rechazar), `destino` (carpeta absoluta) | — Comprueba el espacio libre (`espacio`) y empieza a bajar |
+| `responder` | `oferta` (u64), `aceptar` (índices de `archivos`; vacío o ausente = rechazar), `destino` (carpeta absoluta) | — Comprueba el espacio libre (`espacio`; el doble si el almacén está en el mismo volumen que `destino`, porque hasta la próxima limpieza hay dos copias) y empieza a bajar |
 | `cancelar` | `id` (un envío o una oferta recibida) | — Si la oferta aún no tiene respuesta, la rechaza |
 | `recibir` | `esperaMs` (hasta 30 000) | `eventos`: lista. Llamada larga y cancelable |
 | `estado` | — | `clave`, `alias`, `billete`, `cercanos` `[{clave, alias}]`, `releConectado` |
@@ -36,14 +36,14 @@ Errores de llamada: los códigos del protocolo (`invalid-parameters`, `busy`, �
 | `oferta-retirada` | `oferta` | Quien envía canceló o se fue antes de la respuesta |
 | `respuesta` | `envio`, `aceptados` (índices) | El otro respondió; vacío significa que rechazó |
 | `avance` | `id`, `bytes`, `total` | Como mucho 4 por segundo y por transferencia, en los dos lados |
-| `fin` | `id`, `ok`, `error`?, `rutas`? (solo en el que recibe) | Terminó un envío o una recepción. Hay un solo `fin` por id |
+| `fin` | `id`, `ok`, `error`?, `rutas`? (solo en el que recibe) | Terminó un envío o una recepción aceptada. Hay un solo `fin` por id. Una oferta que el que recibe rechaza o deja caducar no da `fin` en su lado: ya lo sabe |
 
 Los `error` de `fin` son estos:
 - `rechazado`;
 - `cancelado`;
 - `sin-conexion`;
 - `red`;
-- `huella` (el archivo cambió mientras se enviaba);
+- `huella` (el archivo cambió mientras se enviaba; lo dice el que envía, el que recibe ve `red`);
 - `disco`;
 - `ocupado` (el otro tiene demasiadas ofertas pendientes);
 - `version`.
@@ -59,9 +59,12 @@ Todo viaja cifrado de extremo a extremo con QUIC y TLS 1.3, y la identidad de ca
 Una oferta va en un stream bidireccional con marcos JSON (`marco`, tope de 960 KiB):
 
 1. El que envía manda `{"type":"oferta","version":1,"alias":…,"archivos":[{"nombre","tamano","hash"}]}`.
-2. El que recibe contesta `{"type":"respuesta","aceptados":[…]}`.
-3. El que recibe baja cada archivo aceptado por iroh-blobs, desde el que envía.
-4. El que recibe manda `{"type":"fin","ok":…,"error"?}` y se cierra el stream.
+2. Si acepta, el que recibe espera su turno de recepción y contesta `{"type":"respuesta","aceptados":[…]}`. Si rechaza, contesta con la lista vacía.
+3. El que envía espera su turno de envío, da permiso a esas huellas y manda `{"type":"listo"}`. Antes de `listo` el otro no pide nada: si lo pidiera, se lo negarían.
+4. El que recibe baja cada archivo aceptado por iroh-blobs, desde el que envía.
+5. El que recibe manda `{"type":"fin","ok":…,"error"?}` y se cierra el stream.
+
+Si el que envía no sirve ni un byte durante 10 minutos, da el envío por perdido (`red`) y suelta su turno. Mientras espera la respuesta no ocupa turno, y si el otro desaparece, lo detecta el tiempo de inactividad de QUIC.
 
 Quien envía cancela cerrando el stream, y el que recibe ve `oferta-retirada` o `fin` `cancelado`.
 
@@ -69,18 +72,21 @@ Quien envía cancela cerrando el stream, y el que recibe ve `oferta-retirada` o 
 
 ## 4. Archivos
 
-- **El que envía** importa los archivos sin copiarlos (`TryReference`). Si un archivo cambia mientras se envía, el que recibe lo detecta al verificar BLAKE3 por trozos y el envío termina con `huella`.
-- **El que recibe** baja a su almacén. Una descarga cortada se reanuda sola si vuelve a llegar la misma oferta, porque el almacén guarda lo que ya bajó.
+- **El que envía** importa los archivos sin copiarlos (`TryReference`). La limpieza del almacén nunca borra esos archivos: solo borra los suyos internos. Si un archivo cambia mientras se envía, el que recibe lo detecta al verificar BLAKE3 por trozos y corta la descarga. El que envía ve que el archivo cambió (por tamaño o fecha) y termina con `huella`.
+- **El que recibe** baja a su almacén con una reserva por archivo (`rx/<huella>/<segundos>`). Si se corta la red, la reserva queda y una oferta repetida reanuda desde lo bajado. Si cancela el que recibe, la reserva se borra. Las reservas de más de 7 días se borran al abrir.
+- **Lo que ya llegó no se repite.** Si `destino/nombre` ya existe con el mismo tamaño y la misma huella BLAKE3, ese archivo no se baja y su ruta va en `rutas`. Pasa, por ejemplo, con una carpeta repetida tras un corte.
 - **Al terminar cada archivo:**
   1. se exporta a `destino/nombre.beamline-parte`;
   2. se renombra al nombre final;
-  3. se borra del almacén.
+  3. se suelta la reserva y la próxima limpieza lo borra del almacén.
+
+  Si algo falla antes del paso 2, la `.beamline-parte` se borra siempre: también cuando se corta la conexión.
 
   Si el nombre ya existe, se usa `nombre (2).ext`, y así sucesivamente: nunca se pisa un archivo.
 - **Nombres válidos**, que se comprueban en los dos lados:
   - van en forma relativa, con `/` entre partes, de 1 a 1024 bytes en total y cada parte de 1 a 255;
   - no se admiten `.`, `..`, raíz, unidad, `:`, `\`, caracteres de control ni `<>"|?*`;
-  - no se admiten nombres reservados de Windows (`CON`, `NUL`, `COM1`…, también con extensión) ni partes terminadas en punto o espacio.
+  - no se admiten nombres reservados de Windows (`CON`, `NUL`, `COM1`…, `CONIN$`, `CONOUT$`, `COM¹`…, también con extensión) ni partes terminadas en punto o espacio.
 
 ## 5. Límites
 
@@ -90,8 +96,9 @@ Quien envía cancela cerrando el stream, y el que recibe ve `oferta-retirada` o 
 | Tamaño de una oferta | `tamanoMax` del que recibe | Se rechaza sola (`fin` `rechazado` en el que envía) |
 | Ofertas pendientes de respuesta | 4 en total | `ocupado` |
 | Ofertas por minuto y por clave | 10 | Se cierra sin avisar a la app |
-| Transferencias a la vez | 4 por lado | Las demás esperan turno |
-| Tiempo sin respuesta | 10 minutos | Se retira la oferta |
+| Transferencias a la vez | 4 por lado | Las demás esperan turno (§3) |
+| Envío sin avanzar | 10 minutos | `fin` `red` en el que envía |
+| Tiempo sin respuesta | 10 minutos | El que recibe retira la oferta |
 
 ## 6. Billete
 

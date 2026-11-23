@@ -48,6 +48,8 @@ const AVANCE: Duration = Duration::from_millis(250);
 const MAX_EVENTOS: usize = 4096;
 const ESPERA_CONEXION: Duration = Duration::from_secs(30);
 const RESERVA_DIAS: u64 = 7;
+/// Una transferencia sin un byte servido en este tiempo se da por perdida y suelta su turno.
+const INACTIVIDAD: Duration = Duration::from_secs(600);
 
 /// Códigos de cierre de la conexión `beamline/1`.
 mod cierre {
@@ -93,6 +95,8 @@ enum Respuesta {
 
 struct Pendiente {
     responder: oneshot::Sender<Respuesta>,
+    /// Pasa a `activos` al aceptar, para que `cancelar` funcione desde ese instante.
+    cancelar: CancellationToken,
     archivos: Vec<(String, u64)>,
 }
 
@@ -509,8 +513,13 @@ impl Equipo {
             }
             self.0.servidos.lock().unwrap().insert(id, HashMap::new());
         }
+        // Con turno y permisos listos, el otro ya puede pedir los datos.
+        escribir(&mut tx, &json!({"type": "listo"}))
+            .await
+            .map_err(|_| "red")?;
         let mut reloj = tokio::time::interval(AVANCE);
         let mut ultimo = u64::MAX;
+        let mut quieto = Instant::now();
         loop {
             tokio::select! {
                 m = lector.recv() => {
@@ -532,7 +541,10 @@ impl Equipo {
                     let hecho: u64 = self.0.servidos.lock().unwrap().get(&id).map(|m| m.values().sum()).unwrap_or(0);
                     if hecho != ultimo {
                         ultimo = hecho;
+                        quieto = Instant::now();
                         self.emitir(json!({"type": "avance", "id": id, "bytes": hecho.min(total), "total": total}));
+                    } else if quieto.elapsed() > INACTIVIDAD {
+                        return Err("red");
                     }
                 }
                 _ = cancelar.cancelled() => return Err("cancelado"),
@@ -635,15 +647,28 @@ impl Equipo {
             let total: u64 = indices.iter().map(|&i| p.archivos[i].1).sum();
             std::fs::create_dir_all(&destino)
                 .map_err(|e| Fallo("disco", format!("No se pudo crear la carpeta: {e}")))?;
-            for carpeta in [destino.as_path(), self.0.almacen.as_path()] {
+            // Exportar con Copy deja una segunda copia en el almacén hasta la próxima limpieza.
+            // shortcut: «mismo volumen» es la misma raíz de ruta; en Linux siempre lo es y pide el doble aunque sean discos distintos.
+            let mismo = destino.components().next() == self.0.almacen.components().next();
+            for (carpeta, hace_falta) in [
+                (
+                    destino.as_path(),
+                    if mismo {
+                        total.saturating_mul(2)
+                    } else {
+                        total
+                    },
+                ),
+                (self.0.almacen.as_path(), total),
+            ] {
                 let libre =
                     fs4::available_space(carpeta).map_err(|e| Fallo("disco", e.to_string()))?;
-                if libre < total {
+                if libre < hace_falta {
                     return Err(Fallo(
                         "espacio",
                         format!(
                             "Faltan {} bytes libres en {}.",
-                            total - libre,
+                            hace_falta - libre,
                             carpeta.display()
                         ),
                     ));
@@ -652,6 +677,13 @@ impl Equipo {
             Respuesta::Aceptar(indices, destino)
         };
         let p = pend.remove(&oferta).expect("comprobada arriba");
+        if matches!(respuesta, Respuesta::Aceptar(..)) {
+            self.0
+                .activos
+                .lock()
+                .unwrap()
+                .insert(oferta, p.cancelar.clone());
+        }
         let _ = p.responder.send(respuesta);
         Ok(())
     }
@@ -669,14 +701,17 @@ impl Equipo {
 
     fn admitir_ritmo(&self, de: EndpointId) -> bool {
         let mut r = self.0.ritmo.lock().unwrap();
-        let v = r.entry(de).or_default();
         let ahora = Instant::now();
-        while v
-            .front()
-            .is_some_and(|t| ahora.duration_since(*t) > Duration::from_secs(60))
-        {
-            v.pop_front();
-        }
+        r.retain(|_, v| {
+            while v
+                .front()
+                .is_some_and(|t| ahora.duration_since(*t) > Duration::from_secs(60))
+            {
+                v.pop_front();
+            }
+            !v.is_empty()
+        });
+        let v = r.entry(de).or_default();
         if v.len() >= OFERTAS_POR_MINUTO {
             return false;
         }
@@ -723,6 +758,7 @@ impl Equipo {
         }
         let id = self.nuevo_id();
         let (responder, respuesta) = oneshot::channel();
+        let cancelar = self.0.cerrar.child_token();
         let lleno = {
             let mut pend = self.0.pendientes.lock().unwrap();
             let lleno = pend.len() >= MAX_PENDIENTES;
@@ -731,6 +767,7 @@ impl Equipo {
                     id,
                     Pendiente {
                         responder,
+                        cancelar: cancelar.clone(),
                         archivos: archivos
                             .iter()
                             .map(|a| (a.nombre.clone(), a.tamano))
@@ -771,19 +808,10 @@ impl Equipo {
             let _ = tokio::time::timeout(Duration::from_secs(5), conn.closed()).await;
             return;
         };
-        let cancelar = self.0.cerrar.child_token();
-        self.0.activos.lock().unwrap().insert(id, cancelar.clone());
-        let r = if escribir(&mut tx, &json!({"type": "respuesta", "aceptados": indices}))
-            .await
-            .is_err()
-        {
-            Err("red")
-        } else {
-            let elegidos: Vec<&Archivo> = indices.iter().map(|&i| &archivos[i]).collect();
-            tokio::select! {
-                r = self.bajar(id, de, &elegidos, &destino, &cancelar) => r,
-                _ = conn.closed() => Err(if conn.close_reason().is_some_and(|r| es_cancelado(&r)) { "cancelado" } else { "red" }),
-            }
+        let elegidos: Vec<&Archivo> = indices.iter().map(|&i| &archivos[i]).collect();
+        let r = tokio::select! {
+            r = self.recibir_aceptada(id, de, &mut tx, &mut rx, &indices, &elegidos, &destino, &cancelar) => r,
+            _ = conn.closed() => Err(if conn.close_reason().is_some_and(|r| es_cancelado(&r)) { "cancelado" } else { "red" }),
         };
         self.0.activos.lock().unwrap().remove(&id);
         let fin = match &r {
@@ -799,6 +827,36 @@ impl Equipo {
         let _ = tokio::time::timeout(Duration::from_secs(5), conn.closed()).await;
     }
 
+    /// Con la oferta aceptada: turno, respuesta, esperar «listo» del que envía y bajar.
+    #[allow(clippy::too_many_arguments)]
+    async fn recibir_aceptada(
+        &self,
+        id: u64,
+        de: EndpointId,
+        tx: &mut SendStream,
+        rx: &mut RecvStream,
+        indices: &[usize],
+        elegidos: &[&Archivo],
+        destino: &Path,
+        cancelar: &CancellationToken,
+    ) -> Result<Vec<String>, &'static str> {
+        let _turno = tokio::select! {
+            t = self.0.turnos_recepcion.acquire() => t.map_err(|_| "cancelado")?,
+            _ = cancelar.cancelled() => return Err("cancelado"),
+        };
+        escribir(tx, &json!({"type": "respuesta", "aceptados": indices}))
+            .await
+            .map_err(|_| "red")?;
+        let listo = tokio::select! {
+            m = marco::leer(rx, 4096, marco::MAX_PROFUNDIDAD_PAR) => m.map_err(|_| "red")?,
+            _ = cancelar.cancelled() => return Err("cancelado"),
+        };
+        if listo["type"] != "listo" {
+            return Err("red");
+        }
+        self.bajar(id, de, elegidos, destino, cancelar).await
+    }
+
     async fn bajar(
         &self,
         id: u64,
@@ -807,15 +865,18 @@ impl Equipo {
         destino: &Path,
         cancelar: &CancellationToken,
     ) -> Result<Vec<String>, &'static str> {
-        let _turno = tokio::select! {
-            t = self.0.turnos_recepcion.acquire() => t.map_err(|_| "cancelado")?,
-            _ = cancelar.cancelled() => return Err("cancelado"),
-        };
         let total: u64 = archivos.iter().map(|a| a.tamano).sum();
         let mut hecho = 0u64;
         let mut rutas = Vec::new();
         let mut ultimo = Instant::now() - AVANCE;
         for a in archivos {
+            let mut ya = destino.to_path_buf();
+            ya.extend(a.nombre.split('/'));
+            if igual(&ya, a) {
+                hecho += a.tamano;
+                rutas.push(ya.to_string_lossy().into_owned());
+                continue;
+            }
             // La reserva protege lo bajado de la limpieza: si se corta la red, la próxima oferta igual reanuda.
             let reserva = format!("rx/{}/{}", a.hash.to_hex(), ahora());
             self.0
@@ -834,23 +895,25 @@ impl Equipo {
             let ruta = nombres::ruta_libre(destino, &a.nombre).map_err(|_| "disco")?;
             let mut parte = ruta.clone().into_os_string();
             parte.push(".beamline-parte");
-            let parte = PathBuf::from(parte);
+            let parte = Temporal(Some(PathBuf::from(parte)));
+            let ruta_parte = parte.0.clone().expect("recién creada");
             // shortcut: Copy duplica en disco lo bajado hasta la próxima limpieza; con TryReference no, pero el almacén quedaría apuntando al archivo del usuario.
             let exportar = self.0.store.blobs().export_with_opts(ExportOptions {
                 hash: a.hash,
                 mode: ExportMode::Copy,
-                target: parte.clone(),
+                target: ruta_parte.clone(),
             });
             tokio::select! {
                 r = exportar.finish() => { r.map_err(|_| "disco")?; }
-                _ = cancelar.cancelled() => { let _ = std::fs::remove_file(&parte); return Err("cancelado"); }
+                _ = cancelar.cancelled() => return Err("cancelado"),
             }
             let ruta = if ruta.exists() {
                 nombres::ruta_libre(destino, &a.nombre).map_err(|_| "disco")?
             } else {
                 ruta
             };
-            std::fs::rename(&parte, &ruta).map_err(|_| "disco")?;
+            std::fs::rename(&ruta_parte, &ruta).map_err(|_| "disco")?;
+            parte.soltar();
             let _ = self.0.store.tags().delete(&reserva).await;
             hecho += a.tamano;
             rutas.push(ruta.to_string_lossy().into_owned());
@@ -959,6 +1022,36 @@ impl Equipo {
     }
 }
 
+/// Un `.beamline-parte` que se borra solo si no llega a renombrarse (error, cancelación o corte).
+struct Temporal(Option<PathBuf>);
+
+impl Temporal {
+    fn soltar(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for Temporal {
+    fn drop(&mut self) {
+        if let Some(p) = &self.0 {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// El archivo ya está en destino con el mismo contenido (una oferta repetida tras un corte).
+fn igual(ruta: &Path, a: &Archivo) -> bool {
+    if std::fs::metadata(ruta)
+        .map(|m| m.is_file() && m.len() == a.tamano)
+        .ok()
+        != Some(true)
+    {
+        return false;
+    }
+    let mut h = blake3::Hasher::new();
+    h.update_mmap(ruta).is_ok() && h.finalize().as_bytes() == a.hash.as_bytes()
+}
+
 fn es_cancelado(r: &iroh::endpoint::ConnectionError) -> bool {
     matches!(r, iroh::endpoint::ConnectionError::ApplicationClosed(c) if c.error_code == VarInt::from_u32(cierre::CANCELADO))
 }
@@ -1006,7 +1099,7 @@ async fn escribir(tx: &mut SendStream, m: &Value) -> Result<(), ()> {
 fn leer_marcos(mut rx: RecvStream) -> tokio::sync::mpsc::Receiver<Value> {
     let (tx, salida) = tokio::sync::mpsc::channel(4);
     tokio::spawn(async move {
-        while let Ok(m) = marco::leer(&mut rx, 4096, marco::MAX_PROFUNDIDAD_PAR).await {
+        while let Ok(m) = marco::leer(&mut rx, marco::MAX_PAR, marco::MAX_PROFUNDIDAD_PAR).await {
             if tx.send(m).await.is_err() {
                 break;
             }

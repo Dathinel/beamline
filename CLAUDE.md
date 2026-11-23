@@ -12,8 +12,8 @@ App de envío de archivos tipo LocalSend que también funciona por internet: iro
 - El contrato está en `docs\protocolo.md`.
 - Entorno: `. build\entorno.ps1`. Por ahora usa el `.entorno` de la copia de trabajo de Sala.
 - Pruebas:
-  - Rust: `cd red; cargo test`. Hay 14: 5 unitarias y 9 de punta a punta, que incluyen las hostiles y mDNS.
-  - C#: `dotnet test BeamLine.slnx`. Hay 5, y 4 de ellas usan dos procesos reales.
+  - Rust: `cd red; cargo test`. Hay 18: 5 unitarias y 13 de punta a punta, que incluyen las hostiles, mDNS, mil archivos, cinco a la vez y reanudar sin duplicar.
+  - C#: `dotnet test BeamLine.slnx`. Hay 8, y 7 de ellas usan dos procesos reales.
   - No hay CI porque no hay remoto.
 
 ## Estado
@@ -29,15 +29,26 @@ App de envío de archivos tipo LocalSend que también funciona por internet: iro
   - nombres seguros y límites;
   - mDNS con alias;
   - cliente en C# con eventos.
-- La revisión de bloque (ChatGPT, solo lectura) está en curso.
+- Revisión de bloque hecha por Gemini Flash el 22-nov (ChatGPT, Devin y Argon estaban sin cuota). Sus 7 hallazgos de lógica están corregidos y cada uno tiene su prueba:
+  - marcos de más de 4 KiB;
+  - carrera de permisos, resuelta con el marco `listo`;
+  - inactividad del que envía;
+  - `.beamline-parte` huérfana;
+  - duplicados al reanudar;
+  - `CONIN$` y `CONOUT$`;
+  - el mapa de ritmo.
+  
+  Quedan dos propuestas de estructura sin aplicar: partir `atender_oferta` y usar un enum de errores.
 
 Detalles que conviene saber:
 - El `Progress` del downloader cuenta desde el principio del blob, incluido lo que ya había.
 - Con `presets::Minimal`, las direcciones del billete se dan por `MemoryLookup` o por mDNS.
-- El turno de envío se toma al aceptar, no al ofrecer: si no, cuatro ofertas sin respuesta bloquean la quinta.
+- Los turnos se toman al aceptar, no al ofrecer: si no, cuatro ofertas sin respuesta bloquean la quinta. El que envía da los permisos antes de mandar `listo`.
 - Exportar con `Copy` duplica en disco lo bajado hasta la próxima limpieza del almacén (shortcut anotado en `bajar`).
 
 ## Siguiente paso
 
-1. Aplicar lo que encuentre la revisión de bloque.
+1. Preguntas abiertas para Daniel, avanzando con la recomendada:
+   - billetes sin secreto ni caducidad (recomendado, porque cada oferta se acepta a mano) o de un uso;
+   - lo bajado a medias se guarda 7 días para reanudar.
 2. Fase 2: interfaz WinUI 3 AOT. Lista de cercanos, arrastrar y soltar, diálogo de aceptar, progreso, QR del billete, favoritos y guardado sin preguntar.
