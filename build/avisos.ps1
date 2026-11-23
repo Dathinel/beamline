@@ -75,14 +75,9 @@ foreach ($p in 'microsoft.windowsappsdk.winui', 'microsoft.windowsappsdk.foundat
     Archivo "$p $($d.Name) (solo Windows): licencia" (Join-Path $d.FullName 'license.txt')
     if (Test-Path -LiteralPath (Join-Path $d.FullName 'NOTICE.txt')) { Archivo "$p $($d.Name): avisos" (Join-Path $d.FullName 'NOTICE.txt') }
 }
-# SkiaSharp y HarfBuzzSharp nativos de Linux: del volumen de NuGet del contenedor.
-$tmp = Join-Path $Dist 'avisos-linux'
-Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force $tmp | Out-Null
-docker run --rm -v beamline-nuget:/n -v "${tmp}:/o" beamline-linux sh -c 'for p in skiasharp.nativeassets.linux harfbuzzsharp.nativeassets.linux; do d=$(ls -d /n/$p/*/ | tail -1); cp $d/LICENSE.txt /o/$p.LICENSE.txt; cp $d/THIRD-PARTY-NOTICES.txt /o/$p.THIRD-PARTY-NOTICES.txt; done' | Out-Null
-if ($LASTEXITCODE) { throw 'No se pudieron leer los avisos de Skia y HarfBuzz del volumen beamline-nuget (corre antes build\app-linux.ps1).' }
-foreach ($f in Get-ChildItem -LiteralPath $tmp -File | Sort-Object Name) { Archivo "$($f.BaseName) (solo Linux)" $f.FullName }
-Remove-Item -Recurse -Force $tmp
+# SkiaSharp y HarfBuzzSharp nativos de Linux: sus avisos van guardados en buildvisos-linux (salen de sus paquetes
+# NuGet; al subir de versión se vuelven a copiar del volumen beamline-nuget de Docker).
+foreach ($f in Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'avisos-linux') -File | Sort-Object Name) { Archivo "$($f.BaseName) (solo Linux)" $f.FullName }
 
 $salida = Join-Path $Dist 'AVISOS-TERCEROS.txt'
 [IO.File]::WriteAllText($salida, $sb.ToString(), (New-Object Text.UTF8Encoding $false))
