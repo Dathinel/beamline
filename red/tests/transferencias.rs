@@ -45,6 +45,7 @@ async fn equipo_con(dir: &Path, alias: &str, tamano_max: u64, mdns: bool) -> Equ
         inseguro: false,
         limpieza: Duration::from_secs(1),
         espera_respuesta: Duration::from_secs(20),
+        limite_subida: None,
     })
     .await
     .unwrap()

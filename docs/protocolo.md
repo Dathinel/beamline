@@ -10,12 +10,12 @@ Entre los dos se usa el protocolo de módulos v1 de Rodaje y Sala: named pipe, J
 
 | Función | Parámetros | Resultado |
 |---|---|---|
-| `abrir` | `identidad` (64 hex, clave **privada**), `alias` (1–64 caracteres), `almacen` (carpeta absoluta del almacén de iroh-blobs), `red` `{rele: "n0"\|"ninguno"\|URL https, soloRele, mdns}`, `tamanoMax`? (bytes que acepta por oferta; por defecto 1 TiB) | `clave` (pública, 64 hex), `billete` |
-| `ofrecer` | `a`: clave de un equipo cercano o billete; `archivos`: lista (1–4096) de `{ruta, nombre}`, donde `ruta` es el archivo local absoluto y `nombre` la ruta relativa que verá el otro con `/` (la app expande las carpetas) | `envio` (u64). Saca las huellas, conecta y ofrece en segundo plano; el resto llega por eventos |
+| `abrir` | `identidad` (64 hex, clave **privada**), `alias` (1–64 caracteres), `almacen` (carpeta absoluta del almacén de iroh-blobs), `red` `{rele: "n0"\|"ninguno"\|URL https, soloRele, mdns, limiteSubida?}` (`soloRele` solo con un relé propio; `limiteSubida` en bytes por segundo), `tamanoMax`? (bytes que acepta por oferta; por defecto 1 TiB) | `clave` (pública, 64 hex), `billete` |
+| `ofrecer` | `a`: clave de un equipo cercano o billete, o una lista de 1 a 8 de ellos (§7); `archivos`: lista (1–4096) de `{ruta, nombre}`, donde `ruta` es el archivo local absoluto y `nombre` la ruta relativa que verá el otro con `/` (la app expande las carpetas) | `envio` (u64), o `envios` (uno por destino, en el orden de `a`) si `a` es una lista. Saca las huellas una vez, conecta y ofrece en segundo plano; el resto llega por eventos |
 | `responder` | `oferta` (u64), `aceptar` (índices de `archivos`; vacío o ausente = rechazar), `destino` (carpeta absoluta) | — Comprueba el espacio libre (`espacio`; el doble si el almacén está en el mismo volumen que `destino`, porque hasta la próxima limpieza hay dos copias) y empieza a bajar. Descuenta también el espacio comprometido por las otras aceptaciones |
 | `cancelar` | `id` (un envío o una oferta recibida) | — Si la oferta aún no tiene respuesta, la rechaza |
 | `recibir` | `esperaMs` (hasta 30 000) | `eventos`: lista. Llamada larga y cancelable |
-| `estado` | — | `clave`, `alias`, `billete`, `cercanos` `[{clave, alias}]`, `releConectado` |
+| `estado` | — | `clave`, `alias`, `billete`, `cercanos` `[{clave, alias}]`, `releConectado`, `subidos` (bytes de datos servidos desde que se abrió) |
 | `cerrar` | — | — Cancela todo y cierra |
 
 Errores de llamada: los códigos del protocolo (`invalid-parameters`, `busy`, …) más estos:
@@ -46,7 +46,8 @@ Los `error` de `fin` son estos:
 - `huella` (el archivo cambió mientras se enviaba; lo dice el que envía, el que recibe ve `red`);
 - `disco`;
 - `ocupado` (el otro tiene demasiadas ofertas pendientes);
-- `version`.
+- `version`;
+- `sin-directa` (con el relé de n0 no se consiguió conexión directa en 20 s: por ese relé no van archivos, §7).
 
 ## 3. Entre equipos
 
@@ -110,3 +111,16 @@ Quien envía cancela cerrando el stream, y el que recibe ve `oferta-retirada` o 
 ## 6. Billete
 
 Un billete es `beam1` seguido de base64url del JSON de la `EndpointAddr`, que lleva la clave, el relé y las direcciones. Sirve para enviar a un equipo que no está en la red local. No lleva ningún secreto: quien recibe acepta cada oferta, y los límites del §5 evitan que llenen el disco o la pantalla de ofertas.
+
+## 7. Varios destinos, relé y límite de subida (fase 3)
+
+**Envío a varios.** `ofrecer` con una lista en `a` abre un envío por destino, con los archivos importados una sola vez. Si son dos o más, cada oferta lleva `grupo`: los billetes de todos los destinos, en el mismo orden para todos.
+- El que recibe rechaza la oferta (marco inválido) si `grupo` no tiene de 2 a 8 billetes válidos y distintos, si no está él exactamente una vez o si está el que envía.
+- Cada archivo de 4 MiB o más se parte en tantos trozos como receptores, alineados a bloques de 16 KiB. El receptor `k` baja el trozo `k` del emisor. Para los demás trozos pregunta con `observe` al receptor que le toca: en cuanto lo tiene entero, se lo pide a él, con el emisor como reserva. Si ese receptor se niega (no aceptó), se va o no avanza en 30 s, el trozo se pide al emisor. Al final se pide al emisor lo que falte, que normalmente es nada.
+- Un receptor de un grupo, desde que el emisor manda `listo`, sirve a los demás del grupo las huellas que aceptó (`get` y `observe`), y lo sigue haciendo 2 minutos después de terminar, con los blobs protegidos de la limpieza. A nadie más.
+- Medido en la prueba de 3 receptores con 24 MiB: el emisor sube 1,0 veces el tamaño y los receptores se sirven el resto entre ellos.
+
+**Relé.** Con el relé de n0 (`rele: "n0"`), el que recibe espera hasta 20 s a que la conexión con el emisor vaya por una ruta directa antes de pedir datos. Si no la hay, termina con `sin-directa`, porque por ese relé los archivos iban a 0,04 MiB/s (fase 0). Con un relé propio (URL) los datos pueden ir por él, y `soloRele` obliga a que vayan siempre por él, lo que oculta la IP.
+- shortcut: se mira la ruta de la conexión de la oferta, no la de iroh-blobs; las dos van al mismo equipo por el mismo socket.
+
+**Límite de subida.** Con `limiteSubida`, cada bloque de 16 KiB que sirve este equipo espera su turno en un solo ritmo para todo lo que sirve. Sin límite, ese gancho ni se activa.

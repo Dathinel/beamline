@@ -25,7 +25,7 @@ use iroh_blobs::{
     },
     provider::events::{
         AbortReason, ConnectMode, EventMask, EventSender, ObserveMode, ProviderMessage,
-        RequestMode, RequestUpdate,
+        RequestMode, RequestUpdate, ThrottleMode,
     },
     store::{
         GcConfig,
@@ -38,6 +38,8 @@ use tokio::sync::{Notify, Semaphore, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::{billete, nombres};
+use grupo::Grupo;
+use iroh::address_lookup::memory::MemoryLookup;
 
 pub const ALPN: &[u8] = b"beamline/1";
 pub const MAX_ARCHIVOS: usize = 4096;
@@ -51,6 +53,8 @@ const ESPERA_CONEXION: Duration = Duration::from_secs(30);
 const RESERVA_DIAS: u64 = 7;
 /// Sin avanzar en este tiempo se da la transferencia por perdida y se suelta su turno.
 const INACTIVIDAD: Duration = Duration::from_secs(600);
+/// Lo que se espera a que la conexión pase a directa cuando el relé es el de n0.
+const ESPERA_DIRECTA: Duration = Duration::from_secs(20);
 
 /// Códigos de cierre de la conexión `beamline/1`.
 mod cierre {
@@ -81,7 +85,12 @@ pub struct Config {
     pub limpieza: Duration,
     /// Cuánto espera una oferta su respuesta.
     pub espera_respuesta: Duration,
+    /// Bytes por segundo que sirve como mucho este equipo (None, sin límite).
+    pub limite_subida: Option<u64>,
 }
+
+/// Tamaño y fecha de un archivo al importarlo: si cambian, el envío termina con `huella`.
+type Firma = (u64, Option<SystemTime>);
 
 struct Archivo {
     nombre: String,
@@ -129,6 +138,29 @@ struct Interno {
     turnos_envio: Semaphore,
     turnos_recepcion: Semaphore,
     cerrar: CancellationToken,
+    /// Direcciones de los billetes, para que el descargador encuentre a los equipos por su clave.
+    memoria: MemoryLookup,
+    /// Bytes de datos servidos en total (los de todos los envíos y los que se sirven a un grupo).
+    subidos: AtomicU64,
+    /// Con el relé de n0, los archivos solo van por conexión directa (fase 0: por n0 iban a 0,04 MiB/s).
+    exigir_directa: bool,
+    limite: Option<Limitador>,
+}
+
+/// Reparte la subida a un ritmo fijo: cada bloque de 16 KiB espera su turno.
+struct Limitador {
+    bytes_por_segundo: u64,
+    siguiente: Mutex<tokio::time::Instant>,
+}
+
+impl Limitador {
+    fn turno(&self, bytes: u64) -> tokio::time::Instant {
+        let mut s = self.siguiente.lock().unwrap();
+        let ahora = tokio::time::Instant::now();
+        let t = (*s).max(ahora);
+        *s = t + Duration::from_secs_f64(bytes as f64 / self.bytes_por_segundo as f64);
+        t
+    }
 }
 
 fn fallo<T>(code: &'static str, msg: impl Into<String>) -> Result<T, Fallo> {
@@ -177,8 +209,9 @@ impl Equipo {
             }
         };
         if c.solo_rele {
-            if matches!(c.rele, Rele::Ninguno) {
-                return fallo("invalid-parameters", "«soloRele» necesita un relé.");
+            // Solo relé con el de n0 pasaría los archivos por él, y por ahí no van (fase 0).
+            if !matches!(c.rele, Rele::Url(_)) {
+                return fallo("invalid-parameters", "«soloRele» necesita un relé propio.");
             }
             b = b.clear_ip_transports();
         }
@@ -206,6 +239,14 @@ impl Equipo {
         if let Ok(datos) = c.alias.parse() {
             b = b.user_data_for_address_lookup(datos);
         }
+        let memoria = MemoryLookup::new();
+        b = b.address_lookup(memoria.clone());
+        if c.limite_subida == Some(0) {
+            return fallo(
+                "invalid-parameters",
+                "«limiteSubida» tiene que ser mayor que 0.",
+            );
+        }
         let ep = b
             .secret_key(c.identidad)
             .bind()
@@ -222,8 +263,13 @@ impl Equipo {
                 get: RequestMode::InterceptLog,
                 get_many: RequestMode::Disabled,
                 push: RequestMode::Disabled,
-                observe: ObserveMode::Disabled,
-                ..EventMask::DEFAULT
+                observe: ObserveMode::Intercept,
+                // Cada bloque pasa por el gancho solo si hay límite: sin él no se paga ese viaje.
+                throttle: if c.limite_subida.is_some() {
+                    ThrottleMode::Intercept
+                } else {
+                    ThrottleMode::None
+                },
             },
         );
         let blobs = BlobsProtocol::new(&store, Some(eventos_blobs));
@@ -254,6 +300,13 @@ impl Equipo {
                 turnos_envio: Semaphore::new(TRANSFERENCIAS),
                 turnos_recepcion: Semaphore::new(TRANSFERENCIAS),
                 cerrar: CancellationToken::new(),
+                memoria,
+                subidos: AtomicU64::new(0),
+                exigir_directa: matches!(c.rele, Rele::N0),
+                limite: c.limite_subida.map(|b| Limitador {
+                    bytes_por_segundo: b,
+                    siguiente: Mutex::new(tokio::time::Instant::now()),
+                }),
             }
         });
         let e = Equipo(equipo);
@@ -301,7 +354,8 @@ impl Equipo {
             .next()
             .is_some();
         json!({"clave": self.clave().to_string(), "alias": self.0.alias, "billete": self.billete(),
-               "cercanos": cercanos, "releConectado": rele})
+               "cercanos": cercanos, "releConectado": rele,
+               "subidos": self.0.subidos.load(Ordering::Relaxed)})
     }
 
     pub async fn cerrar(&self) {
@@ -411,22 +465,46 @@ impl Equipo {
 
     /// Valida la oferta y la manda en segundo plano; devuelve el id del envío.
     pub fn ofrecer(&self, a: &str, archivos: Vec<(PathBuf, String)>) -> Result<u64, Fallo> {
-        let destino = if a.trim().starts_with("beam1") {
-            billete::leer(a).ok_or(Fallo("billete-invalido", "El billete no es válido.".into()))?
-        } else {
-            let id: EndpointId = a.parse().map_err(|_| {
-                Fallo(
-                    "invalid-parameters",
-                    "«a» tiene que ser una clave o un billete.".into(),
-                )
-            })?;
-            EndpointAddr::new(id)
-        };
-        if destino.id == self.clave() {
+        Ok(self.ofrecer_varios(&[a.to_string()], archivos)?[0])
+    }
+
+    /// Lo mismo a varios equipos (docs/protocolo.md §7): un envío por destino, con los archivos importados una
+    /// vez y, si son más de uno, repartiendo la subida entre ellos.
+    pub fn ofrecer_varios(
+        &self,
+        a: &[String],
+        archivos: Vec<(PathBuf, String)>,
+    ) -> Result<Vec<u64>, Fallo> {
+        if a.is_empty() || a.len() > grupo::MAX_GRUPO {
             return fallo(
                 "invalid-parameters",
-                "No se puede enviar a este mismo equipo.",
+                format!("Se envía a entre 1 y {} equipos.", grupo::MAX_GRUPO),
             );
+        }
+        let mut destinos: Vec<EndpointAddr> = Vec::with_capacity(a.len());
+        for a in a {
+            let destino = if a.trim().starts_with("beam1") {
+                billete::leer(a)
+                    .ok_or(Fallo("billete-invalido", "El billete no es válido.".into()))?
+            } else {
+                let id: EndpointId = a.parse().map_err(|_| {
+                    Fallo(
+                        "invalid-parameters",
+                        "«a» tiene que ser una clave o un billete.".into(),
+                    )
+                })?;
+                EndpointAddr::new(id)
+            };
+            if destino.id == self.clave() {
+                return fallo(
+                    "invalid-parameters",
+                    "No se puede enviar a este mismo equipo.",
+                );
+            }
+            if destinos.iter().any(|d| d.id == destino.id) {
+                return fallo("invalid-parameters", "Hay un equipo repetido.");
+            }
+            destinos.push(destino);
         }
         if archivos.is_empty() || archivos.len() > MAX_ARCHIVOS {
             return fallo(
@@ -449,40 +527,75 @@ impl Equipo {
                 ));
             }
         }
-        let id = self.nuevo_id();
-        let eventos = self.reservar_eventos(id).ok_or(Fallo(
-            "busy",
-            "La app debe recoger los eventos pendientes.".into(),
-        ))?;
-        let cancelar = self.0.cerrar.child_token();
-        self.0.activos.lock().unwrap().insert(id, cancelar.clone());
+        let mut envios = Vec::with_capacity(destinos.len());
+        for _ in &destinos {
+            let id = self.nuevo_id();
+            let eventos = self.reservar_eventos(id).ok_or(Fallo(
+                "busy",
+                "La app debe recoger los eventos pendientes.".into(),
+            ))?;
+            envios.push((id, eventos, self.0.cerrar.child_token()));
+        }
+        for d in &destinos {
+            self.0.memoria.add_endpoint_info(d.clone());
+        }
+        let grupo: Option<Vec<String>> =
+            (destinos.len() > 1).then(|| destinos.iter().map(billete::crear).collect());
+        let ids: Vec<u64> = envios.iter().map(|(id, _, _)| *id).collect();
+        {
+            let mut activos = self.0.activos.lock().unwrap();
+            for (id, _, t) in &envios {
+                activos.insert(*id, t.clone());
+            }
+        }
         let e = self.clone();
         tokio::spawn(async move {
-            let _eventos = eventos;
-            let r = e.enviar(id, destino, archivos, &cancelar).await;
-            e.0.activos.lock().unwrap().remove(&id);
-            e.0.servidos.lock().unwrap().remove(&id);
-            e.revocar(id);
-            e.emitir(match r {
-                Ok(()) => json!({"type": "fin", "id": id, "ok": true}),
-                Err(error) => json!({"type": "fin", "id": id, "ok": false, "error": error}),
-            });
+            let importado = e.importar(&archivos).await;
+            let tareas =
+                envios
+                    .into_iter()
+                    .zip(destinos)
+                    .map(|((id, eventos, cancelar), destino)| {
+                        let e = e.clone();
+                        let importado = importado.as_ref();
+                        let grupo = grupo.as_deref();
+                        let archivos = &archivos;
+                        async move {
+                            let _eventos = eventos;
+                            let r = match importado {
+                                Ok((lista, _, firmas)) => {
+                                    e.enviar(id, destino, archivos, lista, firmas, grupo, &cancelar)
+                                        .await
+                                }
+                                Err(error) => Err(*error),
+                            };
+                            e.0.activos.lock().unwrap().remove(&id);
+                            e.0.servidos.lock().unwrap().remove(&id);
+                            e.revocar(id);
+                            e.emitir(match r {
+                                Ok(()) => json!({"type": "fin", "id": id, "ok": true}),
+                                Err(error) => {
+                                    json!({"type": "fin", "id": id, "ok": false, "error": error})
+                                }
+                            });
+                        }
+                    });
+            n0_future::join_all(tareas).await;
+            drop(importado);
         });
-        Ok(id)
+        Ok(ids)
     }
 
-    async fn enviar(
+    /// Mete los archivos en el almacén sin copiarlos; las etiquetas los protegen de la limpieza mientras duren.
+    #[allow(clippy::type_complexity)]
+    async fn importar(
         &self,
-        id: u64,
-        destino: EndpointAddr,
-        rutas: Vec<(PathBuf, String)>,
-        cancelar: &CancellationToken,
-    ) -> Result<(), &'static str> {
-        // Las etiquetas temporales protegen los blobs de la limpieza mientras dure el envío.
+        rutas: &[(PathBuf, String)],
+    ) -> Result<(Vec<Archivo>, Vec<TempTag>, Vec<Firma>), &'static str> {
         let mut etiquetas: Vec<TempTag> = Vec::new();
         let mut archivos = Vec::new();
         let mut firmas = Vec::new();
-        for (ruta, nombre) in &rutas {
+        for (ruta, nombre) in rutas {
             let meta = std::fs::metadata(ruta).map_err(|_| "disco")?;
             firmas.push((meta.len(), meta.modified().ok()));
             let importar = self.0.store.blobs().add_path_with_opts(AddPathOptions {
@@ -492,7 +605,7 @@ impl Equipo {
             });
             let tt = tokio::select! {
                 t = importar.temp_tag() => t.map_err(|_| "disco")?,
-                _ = cancelar.cancelled() => return Err("cancelado"),
+                _ = self.0.cerrar.cancelled() => return Err("cancelado"),
             };
             archivos.push(Archivo {
                 nombre: nombre.clone(),
@@ -501,7 +614,23 @@ impl Equipo {
             });
             etiquetas.push(tt);
         }
+        Ok((archivos, etiquetas, firmas))
+    }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn enviar(
+        &self,
+        id: u64,
+        destino: EndpointAddr,
+        rutas: &[(PathBuf, String)],
+        archivos: &[Archivo],
+        firmas: &[Firma],
+        grupo: Option<&[String]>,
+        cancelar: &CancellationToken,
+    ) -> Result<(), &'static str> {
+        if cancelar.is_cancelled() {
+            return Err("cancelado");
+        }
         let ep = self.0.router.endpoint();
         let conn = tokio::select! {
             c = tokio::time::timeout(ESPERA_CONEXION, ep.connect(destino.clone(), ALPN)) => match c {
@@ -510,7 +639,7 @@ impl Equipo {
             },
             _ = cancelar.cancelled() => return Err("cancelado"),
         };
-        let r = self.ofrecer_por(&conn, id, &archivos, cancelar).await;
+        let r = self.ofrecer_por(&conn, id, archivos, grupo, cancelar).await;
         // Si se cierra la app, el otro ve que este equipo se fue (`red`), no una cancelación.
         let codigo = match r {
             _ if self.0.cerrar.is_cancelled() => cierre::CERRADO,
@@ -520,19 +649,15 @@ impl Equipo {
         conn.close(VarInt::from_u32(codigo), b"");
         // Si el otro no pudo bajar algo y el archivo cambió desde que se leyó, la causa es esa.
         if r.is_err() && r != Err("cancelado") {
-            let cambio = rutas
-                .iter()
-                .zip(&firmas)
-                .any(|((ruta, _), (largo, fecha))| {
-                    std::fs::metadata(ruta)
-                        .map(|m| m.len() != *largo || m.modified().ok() != *fecha)
-                        .unwrap_or(true)
-                });
+            let cambio = rutas.iter().zip(firmas).any(|((ruta, _), (largo, fecha))| {
+                std::fs::metadata(ruta)
+                    .map(|m| m.len() != *largo || m.modified().ok() != *fecha)
+                    .unwrap_or(true)
+            });
             if cambio {
                 return Err("huella");
             }
         }
-        drop(etiquetas);
         r
     }
 
@@ -541,6 +666,7 @@ impl Equipo {
         conn: &Connection,
         id: u64,
         archivos: &[Archivo],
+        grupo: Option<&[String]>,
         cancelar: &CancellationToken,
     ) -> Result<(), &'static str> {
         let (mut tx, rx) = conn.open_bi().await.map_err(|_| "sin-conexion")?;
@@ -548,8 +674,11 @@ impl Equipo {
             .iter()
             .map(|a| json!({"nombre": a.nombre, "tamano": a.tamano, "hash": a.hash.to_hex()}))
             .collect();
-        let oferta =
+        let mut oferta =
             json!({"type": "oferta", "version": 1, "alias": self.0.alias, "archivos": lista});
+        if let Some(g) = grupo {
+            oferta["grupo"] = json!(g);
+        }
         let bytes = marco::armar(&oferta);
         if bytes.len() - 4 > marco::MAX_PAR {
             return Err("demasiado-grande");
@@ -677,11 +806,55 @@ impl Equipo {
                         let e = self.clone();
                         tokio::spawn(async move {
                             while let Ok(Some(u)) = m.rx.recv().await {
-                                if let RequestUpdate::Progress(p) = u {
-                                    e.progreso_servido(de, hash, p.end_offset);
+                                match u {
+                                    RequestUpdate::Progress(p) => {
+                                        e.progreso_servido(de, hash, p.end_offset)
+                                    }
+                                    RequestUpdate::Completed(c) => {
+                                        e.0.subidos.fetch_add(
+                                            c.stats.payload_bytes_sent,
+                                            Ordering::Relaxed,
+                                        );
+                                    }
+                                    RequestUpdate::Aborted(c) => {
+                                        e.0.subidos.fetch_add(
+                                            c.stats.payload_bytes_sent,
+                                            Ordering::Relaxed,
+                                        );
+                                    }
+                                    RequestUpdate::Started(_) => {}
                                 }
                             }
                         });
+                    }
+                }
+                // Los del grupo preguntan qué trozos hay; solo se contesta a quien puede pedir esa huella.
+                ProviderMessage::ObserveRequestReceived(m) => {
+                    let ok = conexiones.get(&m.inner.connection_id).is_some_and(|id| {
+                        self.0
+                            .permisos
+                            .lock()
+                            .unwrap()
+                            .get(id)
+                            .is_some_and(|h| h.contains_key(&m.inner.request.hash))
+                    });
+                    m.tx.send(if ok {
+                        Ok(())
+                    } else {
+                        Err(AbortReason::Permission)
+                    })
+                    .await
+                    .ok();
+                }
+                ProviderMessage::Throttle(m) => {
+                    if let Some(l) = &self.0.limite {
+                        let t = l.turno(m.inner.size);
+                        tokio::spawn(async move {
+                            tokio::time::sleep_until(t).await;
+                            m.tx.send(Ok(())).await.ok();
+                        });
+                    } else {
+                        m.tx.send(Ok(())).await.ok();
                     }
                 }
                 _ => {}
@@ -852,15 +1025,24 @@ impl Equipo {
             marco::leer(&mut rx, marco::MAX_PAR, marco::MAX_PROFUNDIDAD_PAR),
         )
         .await;
-        let Some((alias, archivos)) = leido
-            .ok()
-            .and_then(Result::ok)
-            .as_ref()
-            .and_then(leer_oferta)
+        let Some(marco) = leido.ok().and_then(Result::ok) else {
+            conn.close(VarInt::from_u32(cierre::MARCO), b"");
+            return;
+        };
+        let (Some((alias, archivos)), Ok(grupo)) =
+            (leer_oferta(&marco), Grupo::leer(&marco, self.clave(), de))
         else {
             conn.close(VarInt::from_u32(cierre::MARCO), b"");
             return;
         };
+        let grupo = grupo.map(|(g, addrs)| {
+            for a in addrs {
+                if a.id != self.clave() {
+                    self.0.memoria.add_endpoint_info(a);
+                }
+            }
+            g
+        });
         if archivos.is_empty() {
             let _ = escribir(&mut tx, &json!({"type": "version"})).await;
             let _ = tokio::time::timeout(Duration::from_secs(5), conn.closed()).await;
@@ -923,9 +1105,12 @@ impl Equipo {
         };
         let elegidos: Vec<&Archivo> = indices.iter().map(|&i| &archivos[i]).collect();
         let r = tokio::select! {
-            r = self.recibir_aceptada(id, de, &mut tx, &mut rx, &indices, &elegidos, &destino, &cancelar) => r,
+            r = self.recibir_aceptada(id, &conn, &mut tx, &mut rx, &indices, &elegidos, &destino, grupo.as_ref(), &cancelar) => r,
             _ = conn.closed() => Err(if conn.close_reason().is_some_and(|r| es_cancelado(&r)) { "cancelado" } else { "red" }),
         };
+        if let Some(g) = &grupo {
+            self.compartir_un_rato(id, g, &elegidos).await;
+        }
         if r == Err("cancelado") || cancelar.is_cancelled() {
             for a in &elegidos {
                 self.liberar_reservas(a.hash).await;
@@ -951,14 +1136,16 @@ impl Equipo {
     async fn recibir_aceptada(
         &self,
         id: u64,
-        de: EndpointId,
+        conn: &Connection,
         tx: &mut SendStream,
         rx: &mut RecvStream,
         indices: &[usize],
         elegidos: &[&Archivo],
         destino: &Path,
+        grupo: Option<&Grupo>,
         cancelar: &CancellationToken,
     ) -> Result<Vec<String>, &'static str> {
+        let de = conn.remote_id();
         let _turno = tokio::select! {
             t = self.0.turnos_recepcion.acquire() => t.map_err(|_| "cancelado")?,
             _ = cancelar.cancelled() => return Err("cancelado"),
@@ -973,7 +1160,61 @@ impl Equipo {
         if listo["type"] != "listo" {
             return Err("red");
         }
-        self.bajar(id, de, elegidos, destino, cancelar).await
+        if self.0.exigir_directa {
+            self.esperar_directa(conn, cancelar).await?;
+        }
+        if let Some(g) = grupo {
+            // Los demás del grupo pueden pedir a este equipo lo que ya tenga de estos archivos.
+            for (k, m) in g.miembros.iter().enumerate() {
+                if k != g.yo {
+                    self.autorizar(*m, id, elegidos.iter().map(|a| a.hash));
+                }
+            }
+        }
+        self.bajar(id, de, elegidos, destino, grupo, cancelar).await
+    }
+
+    /// Con el relé de n0 los archivos solo van directos: se espera a que la conexión deje de ir por el relé.
+    async fn esperar_directa(
+        &self,
+        conn: &Connection,
+        cancelar: &CancellationToken,
+    ) -> Result<(), &'static str> {
+        // shortcut: se mira la conexión de la oferta; la de iroh-blobs va al mismo equipo y usa la misma ruta.
+        let hasta = tokio::time::Instant::now() + ESPERA_DIRECTA;
+        loop {
+            if conn.paths().iter().any(|p| p.is_selected() && p.is_ip()) {
+                return Ok(());
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+                _ = tokio::time::sleep_until(hasta) => return Err("sin-directa"),
+                _ = cancelar.cancelled() => return Err("cancelado"),
+            }
+        }
+    }
+
+    /// Tras terminar, un receptor de un grupo sigue sirviendo a los demás un rato, con los blobs protegidos.
+    async fn compartir_un_rato(&self, id: u64, g: &Grupo, elegidos: &[&Archivo]) {
+        let mut etiquetas = Vec::new();
+        for a in elegidos {
+            if let Ok(t) = self.0.store.tags().temp_tag(a.hash).await {
+                etiquetas.push(t);
+            }
+        }
+        let e = self.clone();
+        let otros = g.miembros.len() > 1;
+        tokio::spawn(async move {
+            if otros {
+                tokio::select! {
+                    _ = tokio::time::sleep(grupo::COMPARTIR) => {}
+                    _ = e.0.cerrar.cancelled() => {}
+                }
+            }
+            e.revocar(id);
+            e.0.servidos.lock().unwrap().remove(&id);
+            drop(etiquetas);
+        });
     }
 
     async fn bajar(
@@ -982,6 +1223,7 @@ impl Equipo {
         de: EndpointId,
         archivos: &[&Archivo],
         destino: &Path,
+        grupo: Option<&Grupo>,
         cancelar: &CancellationToken,
     ) -> Result<Vec<String>, &'static str> {
         let total: u64 = archivos.iter().map(|a| a.tamano).sum();
@@ -1011,9 +1253,16 @@ impl Equipo {
                 .set(&reserva, a.hash)
                 .await
                 .map_err(|_| "disco")?;
-            let r = self
-                .bajar_uno(id, de, a, hecho, total, &mut ultimo, cancelar)
-                .await;
+            let r = match grupo {
+                Some(g) if a.tamano >= grupo::MIN_REPARTO => {
+                    self.bajar_en_grupo(id, de, a, g, hecho, total, cancelar)
+                        .await
+                }
+                _ => {
+                    self.bajar_uno(id, de, a, hecho, total, &mut ultimo, cancelar)
+                        .await
+                }
+            };
             if matches!(r, Err("cancelado" | "tamano")) {
                 self.liberar_reservas(a.hash).await;
             }
@@ -1441,5 +1690,6 @@ impl ProtocolHandler for Ofertas {
     }
 }
 
+mod grupo;
 #[cfg(test)]
 mod pruebas;

@@ -93,6 +93,13 @@ impl Red {
                     .unwrap_or(600)
                     .clamp(1, 86_400),
             ),
+            limite_subida: match &red["limiteSubida"] {
+                Value::Null => None,
+                v => Some(v.as_u64().ok_or(Fallo(
+                    "invalid-parameters",
+                    "«limiteSubida» son bytes por segundo.".into(),
+                ))?),
+            },
         })
         .await?;
         let r = json!({"clave": e.clave().to_string(), "billete": e.billete()});
@@ -135,7 +142,21 @@ impl Servicio for Red {
                         texto(a, "nombre")?.to_string(),
                     ));
                 }
-                Ok(json!({"envio": e.ofrecer(texto(&p, "a")?, archivos)?}))
+                // «a» es un destino (devuelve «envio») o una lista (devuelve «envios», uno por destino).
+                match &p["a"] {
+                    Value::Array(l) => {
+                        let a = l
+                            .iter()
+                            .map(|x| x.as_str().map(str::to_string))
+                            .collect::<Option<Vec<_>>>()
+                            .ok_or(Fallo(
+                                "invalid-parameters",
+                                "«a» es una clave, un billete o una lista de ellos.".into(),
+                            ))?;
+                        Ok(json!({"envios": e.ofrecer_varios(&a, archivos)?}))
+                    }
+                    _ => Ok(json!({"envio": e.ofrecer(texto(&p, "a")?, archivos)?})),
+                }
             }
             "responder" => {
                 let e = self.actual()?;

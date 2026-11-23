@@ -31,6 +31,7 @@ async fn equipo(c: &Carpeta, alias: &str, plazo: Duration) -> Equipo {
             inseguro: false,
             limpieza: Duration::from_millis(50),
             espera_respuesta: Duration::from_secs(10),
+            limite_subida: None,
         },
         plazo,
     )
@@ -446,6 +447,7 @@ async fn completar_y_cancelar_liberan_todas_las_reservas() {
         e.clave(),
         &[&a],
         &c.0.join("destino"),
+        None,
         &CancellationToken::new(),
     )
     .await
@@ -467,7 +469,7 @@ async fn completar_y_cancelar_liberan_todas_las_reservas() {
         hash: h2,
     };
     assert_eq!(
-        e.bajar(2, e.clave(), &[&a], &c.0.join("destino"), &cancelado)
+        e.bajar(2, e.clave(), &[&a], &c.0.join("destino"), None, &cancelado)
             .await,
         Err("cancelado")
     );
@@ -506,7 +508,14 @@ async fn reanudar_reutiliza_sufijo_incluso_con_huecos() {
         hash: Hash::new(b"correcto"),
     };
     let rutas = e
-        .bajar(1, e.clave(), &[&a], &destino, &CancellationToken::new())
+        .bajar(
+            1,
+            e.clave(),
+            &[&a],
+            &destino,
+            None,
+            &CancellationToken::new(),
+        )
         .await
         .unwrap();
     assert_eq!(rutas, [destino.join("a (3).txt").to_string_lossy()]);
