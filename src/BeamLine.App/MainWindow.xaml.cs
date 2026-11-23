@@ -82,7 +82,8 @@ public sealed partial class MainWindow : Window
         {
             Beam b = await Beam.AbrirAsync(Path.Combine(AppContext.BaseDirectory, "beamline-red.exe"),
                 new OpcionesEquipo(_identidad, _ajustes.Alias, Path.Combine(_arranque.Datos, "almacen"),
-                    new OpcionesRed(_ajustes.Rele, Mdns: !autoprueba)), b =>
+                    new OpcionesRed(_ajustes.Rele, _ajustes.SoloRele && EsUrl(_ajustes.Rele), Mdns: !autoprueba,
+                        LimiteSubida: _ajustes.LimiteSubidaMBs > 0 ? (long)(_ajustes.LimiteSubidaMBs * (1 << 20)) : null)), b =>
                 {
                     // Cada evento se aplica solo si su red sigue siendo la actual (tras reabrir desde Ajustes, los ids empiezan de nuevo).
                     void En(Action a) => _hilo.TryEnqueue(() => { if (ReferenceEquals(_beam, b)) a(); });
@@ -120,13 +121,17 @@ public sealed partial class MainWindow : Window
             foreach (Destino d in Destinos.Where(d => d.Cercano && e.Cercanos.All(c => c.Clave != d.Clave)).ToList())
                 AlCambiarCercano(new Cercano(d.Clave, d.Alias, false));
             MiEstado.Text = _ajustes.Rele == "ninguno" ? "Sin relé: tu red y billetes con dirección directa"
-                : e.ReleConectado ? "Conectado: tu red e internet" : "Solo tu red (sin conexión con el relé)";
+                : !e.ReleConectado ? "Solo tu red (sin conexión con el relé)"
+                : EsUrl(_ajustes.Rele) ? (_ajustes.SoloRele ? "Conectado por tu relé (tu IP queda oculta)" : "Conectado: tu red e internet, con tu relé")
+                : "Conectado: tu red e internet";
         }
         catch (BeamException)
         {
             // Caido ya lo avisa.
         }
     }
+
+    private static bool EsUrl(string rele) => rele.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 
     private async ValueTask CerrarAsync()
     {
@@ -154,14 +159,20 @@ public sealed partial class MainWindow : Window
         ActualizarZona();
     }
 
-    private Destino? Elegido => ListaDestinos.SelectedItem as Destino;
+    private List<Destino> Elegidos => [.. ListaDestinos.SelectedItems.OfType<Destino>()];
 
     private void ListaDestinos_SelectionChanged(object sender, SelectionChangedEventArgs e) => ActualizarZona();
 
     private void ActualizarZona()
     {
         SinEquipos.Visibility = Destinos.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        string? a = Elegido?.Alias ?? (Beam.ClaveDeBillete(CajaBillete.Text) is not null ? "el equipo del billete" : null);
+        List<Destino> e = Elegidos;
+        string? a = e.Count switch
+        {
+            0 => Beam.ClaveDeBillete(CajaBillete.Text) is not null ? "el equipo del billete" : null,
+            1 => e[0].Alias,
+            _ => $"{e.Count} equipos a la vez",
+        };
         TextoZona.Text = a is null ? "Elige a la izquierda a quién enviar" : $"Suelta aquí archivos o carpetas para enviarlos a {a}";
         ElegirArchivos.IsEnabled = ElegirCarpeta.IsEnabled = a is not null && _beam is not null;
     }
@@ -169,7 +180,7 @@ public sealed partial class MainWindow : Window
     private void CajaBillete_TextChanged(object sender, TextChangedEventArgs e)
     {
         GuardarBillete.IsEnabled = Beam.ClaveDeBillete(CajaBillete.Text) is not null;
-        if (GuardarBillete.IsEnabled) ListaDestinos.SelectedItem = null;
+        if (GuardarBillete.IsEnabled) ListaDestinos.SelectedItems.Clear();
         ActualizarZona();
     }
 
@@ -182,7 +193,8 @@ public sealed partial class MainWindow : Window
         d.Billete = billete;
         d.Guardado = true;
         CajaBillete.Text = "";
-        ListaDestinos.SelectedItem = d;
+        ListaDestinos.SelectedItems.Clear();
+        ListaDestinos.SelectedItems.Add(d);
         GuardarEquipos();
     }
 
@@ -256,44 +268,54 @@ public sealed partial class MainWindow : Window
         if (r is not null) await EnviarRutasAsync([r.Path]);
     }
 
-    private (string A, string Alias)? Objetivo()
+    private List<(string A, string Alias)>? Objetivo()
     {
-        if (Elegido is { } d) return (d.A, d.Alias);
+        List<Destino> e = Elegidos;
+        if (e.Count > 0) return [.. e.Select(d => (d.A, d.Alias))];
         string t = CajaBillete.Text.Trim();
-        return Beam.ClaveDeBillete(t) is not null ? (t, "el equipo del billete") : null;
+        return Beam.ClaveDeBillete(t) is not null ? [(t, "el equipo del billete")] : null;
     }
 
-    internal async Task<long?> EnviarRutasAsync(IReadOnlyList<string> rutas)
+    internal async Task<IReadOnlyList<long>> EnviarRutasAsync(IReadOnlyList<string> rutas)
     {
-        if (_beam is not { } beam || rutas.Count == 0) return null;
-        if (Objetivo() is not ({ } a, { } alias))
+        if (_beam is not { } beam || rutas.Count == 0) return [];
+        if (Objetivo() is not { Count: > 0 } destinos)
         {
             Avisar("Elige primero a quién enviar.", InfoBarSeverity.Informational);
-            return null;
+            return [];
+        }
+        if (destinos.Count > 8)
+        {
+            Avisar("Se puede enviar a 8 equipos a la vez como mucho.", InfoBarSeverity.Informational);
+            return [];
         }
         // Recorrer carpetas y leer tamaños puede tardar (disco lento, miles de archivos): fuera del hilo de la interfaz.
         (List<ArchivoAEnviar> Lista, long Total, string? Error) r = await Task.Run(() => Reunir(rutas));
         if (r.Error is not null)
         {
             Avisar(r.Error, InfoBarSeverity.Warning);
-            return null;
+            return [];
         }
         try
         {
-            long id = await beam.OfrecerAsync(a, r.Lista);
-            Transferencia t = new(id, false, $"Para {alias}: {Texto.Archivos(r.Lista.Count)}, {Texto.Tamano(r.Total)}", r.Total)
+            IReadOnlyList<long> ids = destinos.Count == 1
+                ? [await beam.OfrecerAsync(destinos[0].A, r.Lista)]
+                : await beam.OfrecerVariosAsync([.. destinos.Select(d => d.A)], r.Lista);
+            for (int i = 0; i < ids.Count; i++)
             {
-                Estado = "Esperando a que lo acepte…",
-                Archivos = r.Lista.Count,
-                Aceptados = r.Lista.Count,
-            };
-            Insertar(t);
-            return id;
+                Insertar(new Transferencia(ids[i], false, $"Para {destinos[i].Alias}: {Texto.Archivos(r.Lista.Count)}, {Texto.Tamano(r.Total)}", r.Total)
+                {
+                    Estado = "Esperando a que lo acepte…",
+                    Archivos = r.Lista.Count,
+                    Aceptados = r.Lista.Count,
+                });
+            }
+            return ids;
         }
         catch (BeamException ex)
         {
             Avisar("No se pudo enviar: " + ex.Message, InfoBarSeverity.Error);
-            return null;
+            return [];
         }
     }
 
@@ -541,11 +563,28 @@ public sealed partial class MainWindow : Window
         ComboBox rele = new() { Header = "Conexión", HorizontalAlignment = HorizontalAlignment.Stretch };
         rele.Items.Add("Tu red e internet (relé público de n0 para encontrarse)");
         rele.Items.Add("Sin relé: tu red y billetes con dirección directa");
-        rele.SelectedIndex = _ajustes.Rele == "ninguno" ? 1 : 0;
+        rele.Items.Add("Tu red e internet con tu propio relé");
+        rele.SelectedIndex = _ajustes.Rele == "ninguno" ? 1 : EsUrl(_ajustes.Rele) ? 2 : 0;
+        TextBox url = new() { Header = "Dirección de tu relé", PlaceholderText = "https://rele.ejemplo.com", Text = EsUrl(_ajustes.Rele) ? _ajustes.Rele : "" };
+        CheckBox soloRele = new() { Content = "Que todo pase por mi relé (oculta mi IP)", IsChecked = _ajustes.SoloRele };
+        void Propio() => url.Visibility = soloRele.Visibility = rele.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
+        rele.SelectionChanged += (_, _) => Propio();
+        Propio();
+        NumberBox limite = new()
+        {
+            Header = "Límite de subida en MB/s (0, sin límite)",
+            Value = _ajustes.LimiteSubidaMBs,
+            Minimum = 0,
+            Maximum = 10_000,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+        };
         StackPanel cuerpo = new() { Spacing = 12, MinWidth = 420 };
         cuerpo.Children.Add(alias);
         cuerpo.Children.Add(carpeta);
         cuerpo.Children.Add(rele);
+        cuerpo.Children.Add(url);
+        cuerpo.Children.Add(soloRele);
+        cuerpo.Children.Add(limite);
         ContentDialog d = new()
         {
             XamlRoot = Raiz.XamlRoot,
@@ -565,21 +604,34 @@ public sealed partial class MainWindow : Window
         {
             _hayDialogo = false;
         }
-        if (r == ContentDialogResult.Primary) await AplicarAjustesAsync(alias.Text.Trim(), carpeta.Text.Trim(), rele.SelectedIndex == 1 ? "ninguno" : "n0");
+        if (r == ContentDialogResult.Primary)
+        {
+            string nuevo = rele.SelectedIndex switch { 1 => "ninguno", 2 => url.Text.Trim(), _ => "n0" };
+            if (rele.SelectedIndex == 2 && !Uri.TryCreate(nuevo, UriKind.Absolute, out _) | !EsUrl(nuevo))
+            {
+                Avisar("La dirección del relé tiene que empezar por https://. No se cambió la conexión.", InfoBarSeverity.Warning);
+                nuevo = _ajustes.Rele;
+            }
+            double mbs = double.IsNaN(limite.Value) ? 0 : Math.Max(0, limite.Value);
+            await AplicarAjustesAsync(alias.Text.Trim(), carpeta.Text.Trim(), nuevo, soloRele.IsChecked == true, mbs);
+        }
         if (_pendientes.Count > 0 && !_hayDialogo) _ = MostrarOfertasAsync(); // ofertas llegadas con Ajustes abierto
     }
 
-    private async Task AplicarAjustesAsync(string alias, string carpeta, string rele)
+    private async Task AplicarAjustesAsync(string alias, string carpeta, string rele, bool soloRele, double limiteMBs)
     {
-        bool reabrir = (alias.Length > 0 && alias != _ajustes.Alias) || rele != _ajustes.Rele;
+        bool reabrir = (alias.Length > 0 && alias != _ajustes.Alias) || rele != _ajustes.Rele
+            || soloRele != _ajustes.SoloRele || limiteMBs != _ajustes.LimiteSubidaMBs;
         if (alias.Length > 0) _ajustes.Alias = alias;
         if (carpeta.Length > 0) _ajustes.Carpeta = carpeta;
         _ajustes.Rele = rele;
+        _ajustes.SoloRele = soloRele;
+        _ajustes.LimiteSubidaMBs = limiteMBs;
         GuardarEquipos();
         if (!reabrir) return;
         if (Transferencias.Any(t => t.Activa) || _pendientes.Count > 0)
         {
-            Avisar("El nombre y la conexión se aplican al volver a abrir BeamLine, para no cortar lo que está en curso.", InfoBarSeverity.Informational);
+            Avisar("El nombre, la conexión y el límite se aplican al volver a abrir BeamLine, para no cortar lo que está en curso.", InfoBarSeverity.Informational);
             return;
         }
         await CerrarAsync();
@@ -604,7 +656,7 @@ public sealed partial class MainWindow : Window
     {
         Destino d = new(clave) { Alias = alias, Billete = billete, Guardado = true, Confianza = true };
         Destinos.Add(d);
-        ListaDestinos.SelectedItem = d;
+        ListaDestinos.SelectedItems.Add(d);
         ActualizarZona();
     }
 }

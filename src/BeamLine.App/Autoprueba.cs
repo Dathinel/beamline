@@ -46,12 +46,34 @@ internal static class Autoprueba
             string carpeta = Path.Combine(dir, "Vuelta");
             Directory.CreateDirectory(Path.Combine(carpeta, "sub"));
             await File.WriteAllTextAsync(Path.Combine(carpeta, "sub", "nota.txt"), "hola desde la app");
-            long? envio = await v.EnviarRutasAsync([carpeta]);
+            IReadOnlyList<long> envio = await v.EnviarRutasAsync([carpeta]);
             Fin vuelta = await Esperar(finProbador.Task, "vuelta");
             string recibido = Path.Combine(dir, "recibido", "Vuelta", "sub", "nota.txt");
-            bool vueltaOk = envio is not null && vuelta.Ok && File.Exists(recibido) && await File.ReadAllTextAsync(recibido) == "hola desde la app";
+            bool vueltaOk = envio.Count == 1 && vuelta.Ok && File.Exists(recibido) && await File.ReadAllTextAsync(recibido) == "hola desde la app";
             lineas.Add($"vuelta (app → probador, carpeta): {(vueltaOk ? "ok" : "fallo " + vuelta.Error)}");
-            ok = idaOk && vueltaOk;
+
+            // 3. A dos a la vez: se marca otro probador además del primero y se envían 6 MB a los dos (fase 3).
+            TaskCompletionSource<Fin> finOtro = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            finProbador = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using Beam otro = await Beam.AbrirAsync(Path.Combine(AppContext.BaseDirectory, "beamline-red.exe"),
+                new OpcionesEquipo(Dathinel.Sala.Identidad.Nueva(), "probador 2", Path.Combine(dir, "almacen-2"), new OpcionesRed("ninguno", Mdns: false)), b =>
+                {
+                    b.Termino += f => finOtro.TrySetResult(f);
+                    b.OfertaRecibida += o => _ = b.ResponderAsync(o.Id, [.. Enumerable.Range(0, o.Archivos.Count)], Path.Combine(dir, "recibido-2"));
+                });
+            v.AnadirConfianza(otro.Clave, otro.Billete, "probador 2");
+            byte[] grande = new byte[6 << 20];
+            Random.Shared.NextBytes(grande);
+            string doble = Path.Combine(dir, "a-dos.bin");
+            await File.WriteAllBytesAsync(doble, grande);
+            IReadOnlyList<long> dos = await v.EnviarRutasAsync([doble]);
+            Fin f1 = await Esperar(finProbador.Task, "a dos (1)");
+            Fin f2 = await Esperar(finOtro.Task, "a dos (2)");
+            bool dosOk = dos.Count == 2 && f1.Ok && f2.Ok
+                && (await File.ReadAllBytesAsync(Path.Combine(dir, "recibido", "a-dos.bin"))).AsSpan().SequenceEqual(grande)
+                && (await File.ReadAllBytesAsync(Path.Combine(dir, "recibido-2", "a-dos.bin"))).AsSpan().SequenceEqual(grande);
+            lineas.Add($"a dos a la vez (6 MB, reparto entre receptores): {(dosOk ? "ok" : $"fallo {f1.Error} {f2.Error}")}");
+            ok = idaOk && vueltaOk && dosOk;
         }
 #pragma warning disable CA1031 // la autoprueba deja cualquier fallo escrito
         catch (Exception ex)

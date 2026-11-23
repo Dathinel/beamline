@@ -40,8 +40,8 @@
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-            <TextBlock Text="Enviar a" Style="{StaticResource BodyStrongTextBlockStyle}" />
-            <ListView x:Name="ListaDestinos" Grid.Row="1" SelectionMode="Single"
+            <TextBlock Text="Enviar a (puedes marcar varios)" Style="{StaticResource BodyStrongTextBlockStyle}" />
+            <ListView x:Name="ListaDestinos" Grid.Row="1" SelectionMode="Multiple"
                       ItemsSource="{x:Bind Destinos}" SelectionChanged="ListaDestinos_SelectionChanged">
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="local:Destino">

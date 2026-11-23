@@ -117,6 +117,7 @@ internal static class Texto
         "ocupado" => "El otro equipo tiene demasiadas ofertas pendientes",
         "version" => "El otro equipo usa una versión de BeamLine que no es compatible",
         "cerrado" => "Se cerró BeamLine",
+        "sin-directa" => "No se pudo conectar directo con el otro equipo, y por el relé público no se envían archivos. Usad la misma red o un relé propio (Ajustes)",
         null or "" => "Falló",
         _ => codigo,
     };

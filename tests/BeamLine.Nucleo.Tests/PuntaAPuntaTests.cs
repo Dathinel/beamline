@@ -158,6 +158,28 @@ public sealed class PuntaAPuntaTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_varios_llega_a_todos()
+    {
+        ConcurrentQueue<object> eventosCarla = new();
+        await using Beam carla = await AbrirAsync("carla", eventosCarla);
+        byte[] datos = new byte[6 << 20];
+        Random.Shared.NextBytes(datos);
+        string f = Path.Combine(_dir, "grande.bin");
+        await File.WriteAllBytesAsync(f, datos);
+        IReadOnlyList<long> envios = await _ana.OfrecerVariosAsync([_beto.Billete, carla.Billete], [new ArchivoAEnviar(f, "grande.bin")]);
+        Assert.Equal(2, envios.Count);
+        foreach ((Beam b, ConcurrentQueue<object> cola, string nombre) in new[] { (_beto, _eventosBeto, "b"), (carla, eventosCarla, "c") })
+        {
+            Oferta o = await EsperarAsync<Oferta>(cola);
+            await b.ResponderAsync(o.Id, [0], Path.Combine(_dir, "destino-" + nombre));
+        }
+        foreach (long id in envios) Assert.True((await EsperarAsync<Fin>(_eventosAna, x => x.Id == id)).Ok);
+        Assert.Equal(datos, await File.ReadAllBytesAsync(Path.Combine(_dir, "destino-b", "grande.bin")));
+        Assert.Equal(datos, await File.ReadAllBytesAsync(Path.Combine(_dir, "destino-c", "grande.bin")));
+        Assert.True((await _ana.EstadoAsync()).Subidos > 0);
+    }
+
+    [Fact]
     public void La_clave_sale_del_billete()
     {
         Assert.Equal(_beto.Clave, Beam.ClaveDeBillete(_beto.Billete));

@@ -64,6 +64,7 @@ public sealed class Beam : IAsyncDisposable
                     ["soloRele"] = o.Red.SoloRele,
                     ["mdns"] = o.Red.Mdns,
                     ["releInseguro"] = o.ReleInseguro,
+                    ["limiteSubida"] = o.Red.LimiteSubida,
                 },
             }, ct).ConfigureAwait(false);
             b.Clave = r.GetProperty("clave").GetString()!;
@@ -89,6 +90,23 @@ public sealed class Beam : IAsyncDisposable
         return r.GetProperty("envio").GetInt64();
     }
 
+    /// <summary>
+    /// Ofrece lo mismo a varios equipos (hasta 8): un envío por destino, en el mismo orden. Con dos o más, los que
+    /// reciben se reparten la subida entre ellos (docs/protocolo.md §7).
+    /// </summary>
+    public async Task<IReadOnlyList<long>> OfrecerVariosAsync(IReadOnlyList<string> a, IReadOnlyList<ArchivoAEnviar> archivos, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+        ArgumentNullException.ThrowIfNull(archivos);
+        JsonArray destinos = [];
+        foreach (string x in a) destinos.Add((JsonNode)JsonValue.Create(x));
+        JsonArray lista = [];
+        foreach (ArchivoAEnviar x in archivos)
+            lista.Add((JsonNode)new JsonObject { ["ruta"] = Path.GetFullPath(x.Ruta), ["nombre"] = x.Nombre });
+        JsonElement r = await LlamarAsync("ofrecer", new JsonObject { ["a"] = destinos, ["archivos"] = lista }, ct).ConfigureAwait(false);
+        return [.. r.GetProperty("envios").EnumerateArray().Select(e => e.GetInt64())];
+    }
+
     /// <summary>Acepta los índices dados hacia <paramref name="destino"/>; sin índices, rechaza.</summary>
     public Task ResponderAsync(long oferta, IReadOnlyList<int> aceptar, string? destino, CancellationToken ct = default)
     {
@@ -110,7 +128,8 @@ public sealed class Beam : IAsyncDisposable
         JsonElement r = await LlamarAsync("estado", null, ct).ConfigureAwait(false);
         return new Estado(
             [.. r.GetProperty("cercanos").EnumerateArray().Select(c => new Cercano(Texto(c, "clave"), Texto(c, "alias"), true))],
-            r.GetProperty("releConectado").GetBoolean());
+            r.GetProperty("releConectado").GetBoolean(),
+            r.TryGetProperty("subidos", out JsonElement s) ? s.GetInt64() : 0);
     }
 
     /// <summary>

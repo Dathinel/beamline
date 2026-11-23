@@ -18,6 +18,10 @@ internal sealed class Ajustes
     public string Carpeta { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "BeamLine");
     /// <summary>«n0» (internet con el relé público), «ninguno» (solo directa) o una URL https de relé propio.</summary>
     public string Rele { get; set; } = "n0";
+    /// <summary>Con relé propio: que todo vaya por él (oculta la IP a los demás).</summary>
+    public bool SoloRele { get; set; }
+    /// <summary>MB por segundo que sirve como mucho este equipo; 0, sin límite.</summary>
+    public double LimiteSubidaMBs { get; set; }
     public List<Guardado> Equipos { get; set; } = [];
 
     public static Ajustes Cargar(string archivo)
