@@ -2,3 +2,4 @@ target/
 .entorno/
 bin/
 obj/
+dist/

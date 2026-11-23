@@ -9,6 +9,10 @@ App de envío de archivos tipo LocalSend que también funciona por internet: iro
 
 - `red\`: el proceso `beamline-red` en Rust. El núcleo está en `src\equipo.rs`. Habla el protocolo de módulos con la biblioteca de `Sala\red`, que entró en Sala con el PR #26, sin copiarla.
 - `src\BeamLine.Nucleo\`: el cliente en C# (`Beam`). La identidad (DPAPI) viene de `Dathinel.Sala`.
+- `src\BeamLine.App\`: la interfaz (WinUI 3 sin empaquetar, Native AOT, con la receta de Unicomp). `build\app.ps1` compila `beamline-red` en release y publica en `dist\BeamLine`, con `beamline-red.exe` al lado.
+  - `--perfil x` separa los datos para abrir dos ventanas en un PC.
+  - `-Autoprueba` envía y recibe con la ventana fuera de pantalla.
+  - Datos en `%LOCALAPPDATA%\BeamLine`; lo recibido va a `Descargas\BeamLine`.
 - El contrato está en `docs\protocolo.md`.
 - Entorno: `. build\entorno.ps1`. Por ahora usa el `.entorno` de la copia de trabajo de Sala.
 - Pruebas:
@@ -51,4 +55,17 @@ Detalles que conviene saber:
 1. Preguntas abiertas para Daniel, avanzando con la recomendada:
    - billetes sin secreto ni caducidad (recomendado, porque cada oferta se acepta a mano) o de un uso;
    - lo bajado a medias se guarda 7 días para reanudar.
-2. Fase 2: interfaz WinUI 3 AOT. Lista de cercanos, arrastrar y soltar, diálogo de aceptar, progreso, QR del billete, favoritos y guardado sin preguntar.
+2. Fase 2 (23-nov), en código:
+   - equipos cercanos y guardados;
+   - arrastrar y soltar, y elegir archivos o una carpeta;
+   - diálogo para aceptar por archivo;
+   - progreso, cancelar y «Mostrar»;
+   - «Guardar lo suyo sin preguntar»;
+   - billete copiable y ajustes (nombre, carpeta, solo red local).
+
+   La autoprueba AOT pasa.
+
+   Faltan:
+   - el repaso con ratón de Daniel (`docs\pruebas-a-mano.md`). La sesión no tuvo permiso para controlar la pantalla.
+   - el QR del billete, que no tiene sentido sin una app de móvil y se aparca.
+3. Fase 3: varios destinatarios a la vez y relé propio. Por el relé de n0 no se puede pasar archivos.

@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="BeamLine.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:BeamLine.App"
+    Title="BeamLine">
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid x:Name="Raiz" Padding="16" ColumnSpacing="16" RowSpacing="12">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="300" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Este equipo -->
+        <StackPanel Grid.Column="0" Spacing="4">
+            <TextBlock x:Name="MiAlias" Style="{StaticResource SubtitleTextBlockStyle}" />
+            <TextBlock x:Name="MiEstado" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                <Button x:Name="CopiarBillete" Content="Copiar mi billete" Click="CopiarBillete_Click"
+                        ToolTipService.ToolTip="Mándaselo a quien esté fuera de tu red para que pueda enviarte" />
+                <Button x:Name="AbrirAjustes" Content="Ajustes" Click="AbrirAjustes_Click" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Avisos -->
+        <InfoBar x:Name="Aviso" Grid.Column="1" IsOpen="False" VerticalAlignment="Top" />
+
+        <!-- Equipos -->
+        <Grid Grid.Column="0" Grid.Row="1" RowSpacing="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock Text="Enviar a" Style="{StaticResource BodyStrongTextBlockStyle}" />
+            <ListView x:Name="ListaDestinos" Grid.Row="1" SelectionMode="Single"
+                      ItemsSource="{x:Bind Destinos}" SelectionChanged="ListaDestinos_SelectionChanged">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="local:Destino">
+                        <StackPanel Padding="0,6" Background="Transparent">
+                            <StackPanel.ContextFlyout>
+                                <MenuFlyout>
+                                    <MenuFlyoutItem Text="{x:Bind TextoGuardar, Mode=OneWay}" Click="Guardar_Click" Tag="{x:Bind}" />
+                                    <ToggleMenuFlyoutItem Text="Guardar lo suyo sin preguntar" IsChecked="{x:Bind Confianza, Mode=OneWay}"
+                                                          Click="Confianza_Click" Tag="{x:Bind}" />
+                                </MenuFlyout>
+                            </StackPanel.ContextFlyout>
+                            <TextBlock Text="{x:Bind Alias, Mode=OneWay}" />
+                            <TextBlock Text="{x:Bind Detalle, Mode=OneWay}" Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+            <TextBlock x:Name="SinEquipos" Grid.Row="1" TextWrapping="Wrap" Margin="12,8"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Text="Aún no hay equipos. Los de tu red aparecen solos al abrir BeamLine en ellos; para uno de fuera, pega su billete abajo." />
+            <StackPanel Grid.Row="2" Spacing="6">
+                <TextBox x:Name="CajaBillete" PlaceholderText="Pega aquí el billete de otro equipo" TextChanged="CajaBillete_TextChanged" />
+                <Button x:Name="GuardarBillete" Content="Guardar en la lista" Click="GuardarBillete_Click" IsEnabled="False" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Enviar y transferencias -->
+        <Grid Grid.Column="1" Grid.Row="1" RowSpacing="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Border x:Name="Zona" AllowDrop="True" DragOver="Zona_DragOver" Drop="Zona_Drop"
+                    MinHeight="150" CornerRadius="8" BorderThickness="2"
+                    BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="10" Padding="16">
+                    <TextBlock x:Name="TextoZona" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                               Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                        <Button x:Name="ElegirArchivos" Content="Elegir archivos" Click="ElegirArchivos_Click" Style="{StaticResource AccentButtonStyle}" />
+                        <Button x:Name="ElegirCarpeta" Content="Elegir carpeta" Click="ElegirCarpeta_Click" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <ListView x:Name="ListaTransferencias" Grid.Row="1" SelectionMode="None" ItemsSource="{x:Bind Transferencias}">
+                <ListView.Header>
+                    <TextBlock Text="Transferencias" Style="{StaticResource BodyStrongTextBlockStyle}" Margin="12,0,0,6" />
+                </ListView.Header>
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="local:Transferencia">
+                        <Grid Padding="0,8" ColumnSpacing="8" RowSpacing="4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="{x:Bind Titulo}" TextTrimming="CharacterEllipsis" />
+                                <ProgressBar Value="{x:Bind Progreso, Mode=OneWay}" Maximum="100"
+                                             ShowError="{x:Bind Fallo, Mode=OneWay}" />
+                                <TextBlock Text="{x:Bind Estado, Mode=OneWay}" Style="{StaticResource CaptionTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                <Button Content="Cancelar" Visibility="{x:Bind Activa, Mode=OneWay}" Click="Cancelar_Click" Tag="{x:Bind}" />
+                                <Button Content="Mostrar" Visibility="{x:Bind PuedeMostrar, Mode=OneWay}" Click="Mostrar_Click" Tag="{x:Bind}" />
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
+    </Grid>
+</Window>
