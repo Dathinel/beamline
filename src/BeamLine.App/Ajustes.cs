@@ -20,7 +20,7 @@ internal sealed class Ajustes
     public string Rele { get; set; } = "n0";
     /// <summary>Con relé propio: que todo vaya por él (oculta la IP a los demás).</summary>
     public bool SoloRele { get; set; }
-    /// <summary>MB por segundo que sirve como mucho este equipo; 0, sin límite.</summary>
+    /// <summary>MiB por segundo que sirve como mucho este equipo; 0, sin límite.</summary>
     public double LimiteSubidaMBs { get; set; }
     public List<Guardado> Equipos { get; set; } = [];
 

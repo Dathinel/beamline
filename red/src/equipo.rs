@@ -89,6 +89,9 @@ pub struct Config {
     pub limite_subida: Option<u64>,
 }
 
+/// El turno de envío que comparte un grupo: lo toma el primero que acepta.
+type TurnoGrupo = tokio::sync::OnceCell<tokio::sync::OwnedSemaphorePermit>;
+
 /// Tamaño y fecha de un archivo al importarlo: si cambian, el envío termina con `huella`.
 type Firma = (u64, Option<SystemTime>);
 
@@ -135,7 +138,7 @@ struct Interno {
     servidos: Mutex<HashMap<u64, HashMap<Hash, u64>>>,
     cercanos: Mutex<HashMap<EndpointId, String>>,
     ritmo: Mutex<HashMap<EndpointId, VecDeque<Instant>>>,
-    turnos_envio: Semaphore,
+    turnos_envio: Arc<Semaphore>,
     turnos_recepcion: Semaphore,
     cerrar: CancellationToken,
     /// Direcciones de los billetes, para que el descargador encuentre a los equipos por su clave.
@@ -145,6 +148,10 @@ struct Interno {
     /// Con el relé de n0, los archivos solo van por conexión directa (fase 0: por n0 iban a 0,04 MiB/s).
     exigir_directa: bool,
     limite: Option<Limitador>,
+    /// Último avance de cada recepción, para contárselo al emisor en un grupo.
+    progreso: Mutex<HashMap<u64, u64>>,
+    /// Lo que un receptor deja pedir a los otros del grupo: solo su trozo de cada huella (id de su recepción).
+    solo_trozo: Mutex<HashMap<(u64, EndpointId, Hash), iroh_blobs::protocol::ChunkRanges>>,
 }
 
 /// Reparte la subida a un ritmo fijo: cada bloque de 16 KiB espera su turno.
@@ -226,7 +233,7 @@ impl Equipo {
                 "«releInseguro» solo existe en el binario de pruebas.",
             );
         }
-        let mdns = if c.mdns {
+        let mdns = if c.mdns && !c.solo_rele {
             let m = iroh_mdns_address_lookup::MdnsAddressLookup::builder()
                 .service_name("beamline")
                 .build(c.identidad.public())
@@ -297,12 +304,14 @@ impl Equipo {
                 servidos: Mutex::default(),
                 cercanos: Mutex::default(),
                 ritmo: Mutex::default(),
-                turnos_envio: Semaphore::new(TRANSFERENCIAS),
+                turnos_envio: Arc::new(Semaphore::new(TRANSFERENCIAS)),
                 turnos_recepcion: Semaphore::new(TRANSFERENCIAS),
                 cerrar: CancellationToken::new(),
                 memoria,
                 subidos: AtomicU64::new(0),
                 exigir_directa: matches!(c.rele, Rele::N0),
+                progreso: Mutex::default(),
+                solo_trozo: Mutex::default(),
                 limite: c.limite_subida.map(|b| Limitador {
                     bytes_por_segundo: b,
                     siguiente: Mutex::new(tokio::time::Instant::now()),
@@ -369,6 +378,21 @@ impl Equipo {
     }
 
     fn emitir(&self, ev: Value) {
+        if let Some(id) = ev["id"].as_u64() {
+            match ev["type"].as_str() {
+                Some("avance") => {
+                    self.0
+                        .progreso
+                        .lock()
+                        .unwrap()
+                        .insert(id, ev["bytes"].as_u64().unwrap_or(0));
+                }
+                Some("fin") => {
+                    self.0.progreso.lock().unwrap().remove(&id);
+                }
+                _ => {}
+            }
+        }
         let mut cola = self.0.eventos.lock().unwrap();
         cola.emitir(ev);
         drop(cola);
@@ -420,6 +444,11 @@ impl Equipo {
     }
 
     fn revocar(&self, id: u64) {
+        self.0
+            .solo_trozo
+            .lock()
+            .unwrap()
+            .retain(|(i, _, _), _| *i != id);
         self.0.permisos.lock().unwrap().retain(|_, hashes| {
             hashes.retain(|_, envios| {
                 envios.remove(&id);
@@ -548,9 +577,23 @@ impl Equipo {
                 activos.insert(*id, t.clone());
             }
         }
+        // La importación se para si se cancelan todos los envíos (o se cierra).
+        let todos = self.0.cerrar.child_token();
+        {
+            let tokens: Vec<CancellationToken> = envios.iter().map(|(_, _, t)| t.clone()).collect();
+            let todos = todos.clone();
+            tokio::spawn(async move {
+                for t in tokens {
+                    t.cancelled().await;
+                }
+                todos.cancel();
+            });
+        }
+        // Un grupo ocupa un solo turno de envío: si no, de 5 a 8 receptores no se repartirían nada.
+        let turno_grupo = (destinos.len() > 1).then(|| Arc::new(tokio::sync::OnceCell::new()));
         let e = self.clone();
         tokio::spawn(async move {
-            let importado = e.importar(&archivos).await;
+            let importado = e.importar(&archivos, &todos).await;
             let tareas =
                 envios
                     .into_iter()
@@ -559,13 +602,23 @@ impl Equipo {
                         let e = e.clone();
                         let importado = importado.as_ref();
                         let grupo = grupo.as_deref();
+                        let turno_grupo = turno_grupo.clone();
                         let archivos = &archivos;
                         async move {
                             let _eventos = eventos;
                             let r = match importado {
                                 Ok((lista, _, firmas)) => {
-                                    e.enviar(id, destino, archivos, lista, firmas, grupo, &cancelar)
-                                        .await
+                                    e.enviar(
+                                        id,
+                                        destino,
+                                        archivos,
+                                        lista,
+                                        firmas,
+                                        grupo,
+                                        turno_grupo.as_deref(),
+                                        &cancelar,
+                                    )
+                                    .await
                                 }
                                 Err(error) => Err(*error),
                             };
@@ -591,6 +644,7 @@ impl Equipo {
     async fn importar(
         &self,
         rutas: &[(PathBuf, String)],
+        cancelar: &CancellationToken,
     ) -> Result<(Vec<Archivo>, Vec<TempTag>, Vec<Firma>), &'static str> {
         let mut etiquetas: Vec<TempTag> = Vec::new();
         let mut archivos = Vec::new();
@@ -605,7 +659,7 @@ impl Equipo {
             });
             let tt = tokio::select! {
                 t = importar.temp_tag() => t.map_err(|_| "disco")?,
-                _ = self.0.cerrar.cancelled() => return Err("cancelado"),
+                _ = cancelar.cancelled() => return Err("cancelado"),
             };
             archivos.push(Archivo {
                 nombre: nombre.clone(),
@@ -626,6 +680,7 @@ impl Equipo {
         archivos: &[Archivo],
         firmas: &[Firma],
         grupo: Option<&[String]>,
+        turno_grupo: Option<&TurnoGrupo>,
         cancelar: &CancellationToken,
     ) -> Result<(), &'static str> {
         if cancelar.is_cancelled() {
@@ -639,7 +694,9 @@ impl Equipo {
             },
             _ = cancelar.cancelled() => return Err("cancelado"),
         };
-        let r = self.ofrecer_por(&conn, id, archivos, grupo, cancelar).await;
+        let r = self
+            .ofrecer_por(&conn, id, archivos, grupo, turno_grupo, cancelar)
+            .await;
         // Si se cierra la app, el otro ve que este equipo se fue (`red`), no una cancelación.
         let codigo = match r {
             _ if self.0.cerrar.is_cancelled() => cierre::CERRADO,
@@ -667,6 +724,7 @@ impl Equipo {
         id: u64,
         archivos: &[Archivo],
         grupo: Option<&[String]>,
+        turno_grupo: Option<&TurnoGrupo>,
         cancelar: &CancellationToken,
     ) -> Result<(), &'static str> {
         let (mut tx, rx) = conn.open_bi().await.map_err(|_| "sin-conexion")?;
@@ -711,9 +769,19 @@ impl Equipo {
             return Err("rechazado");
         }
         // El turno cuenta desde que el otro acepta: esperar respuesta no ocupa transferencia.
-        let _turno = tokio::select! {
-            t = self.0.turnos_envio.acquire() => t.map_err(|_| "cancelado")?,
-            _ = cancelar.cancelled() => return Err("cancelado"),
+        let _turno = match turno_grupo {
+            // El primero del grupo que acepta toma el turno para todos; se suelta al acabar el grupo.
+            Some(t) => {
+                tokio::select! {
+                    r = t.get_or_try_init(|| self.0.turnos_envio.clone().acquire_owned()) => { r.map_err(|_| "cancelado")?; }
+                    _ = cancelar.cancelled() => return Err("cancelado"),
+                }
+                None
+            }
+            None => Some(tokio::select! {
+                t = self.0.turnos_envio.clone().acquire_owned() => t.map_err(|_| "cancelado")?,
+                _ = cancelar.cancelled() => return Err("cancelado"),
+            }),
         };
         let total: u64 = aceptados.iter().map(|&i| archivos[i].tamano).sum();
         self.autorizar(
@@ -728,10 +796,16 @@ impl Equipo {
         let mut reloj = tokio::time::interval(AVANCE);
         let mut ultimo = u64::MAX;
         let mut quieto = Instant::now();
+        // En un grupo, el receptor saca casi todo de los demás: su propio aviso de avance es lo que cuenta aquí.
+        let mut de_grupo = 0u64;
         loop {
             tokio::select! {
                 m = lector.recv() => {
                     let fin = m.ok_or("red")?;
+                    if grupo.is_some() && fin["type"] == "avance" {
+                        de_grupo = de_grupo.max(fin["bytes"].as_u64().unwrap_or(0).min(total));
+                        continue;
+                    }
                     if fin["type"] != "fin" {
                         return Err("red");
                     }
@@ -741,12 +815,17 @@ impl Equipo {
                             Some("cancelado") => "cancelado",
                             Some("disco") => "disco",
                             Some("huella") => "huella",
+                            Some("sin-directa") => "sin-directa",
                             _ => "red",
                         })
                     };
                 }
                 _ = reloj.tick() => {
-                    let hecho: u64 = self.0.servidos.lock().unwrap().get(&id).map(|m| m.values().sum()).unwrap_or(0);
+                    let hecho = if grupo.is_some() {
+                        de_grupo
+                    } else {
+                        self.0.servidos.lock().unwrap().get(&id).map(|m| m.values().sum()).unwrap_or(0)
+                    };
                     if hecho != ultimo {
                         ultimo = hecho;
                         quieto = Instant::now();
@@ -797,6 +876,22 @@ impl Equipo {
                                 .unwrap()
                                 .get(id)
                                 .and_then(|h| h.get(&hash).cloned())
+                        })
+                        .filter(|ids| {
+                            // Un miembro de un grupo solo puede pedir el trozo de este equipo, no el blob entero.
+                            let pedido = m
+                                .request
+                                .ranges
+                                .as_single()
+                                .map(|(_, r)| r.clone())
+                                .unwrap_or_default();
+                            let trozos = self.0.solo_trozo.lock().unwrap();
+                            ids.iter().any(|id| {
+                                match par.and_then(|p| trozos.get(&(*id, p, hash))) {
+                                    None => true,
+                                    Some(t) => (pedido.clone() & t.clone()) == pedido,
+                                }
+                            })
                         });
                     m.tx.send(envio.as_ref().map(|_| ()).ok_or(AbortReason::Permission))
                         .await
@@ -849,9 +944,12 @@ impl Equipo {
                 ProviderMessage::Throttle(m) => {
                     if let Some(l) = &self.0.limite {
                         let t = l.turno(m.inner.size);
+                        let cerrar = self.0.cerrar.clone();
                         tokio::spawn(async move {
-                            tokio::time::sleep_until(t).await;
-                            m.tx.send(Ok(())).await.ok();
+                            tokio::select! {
+                                _ = tokio::time::sleep_until(t) => { m.tx.send(Ok(())).await.ok(); }
+                                _ = cerrar.cancelled() => {}
+                            }
                         });
                     } else {
                         m.tx.send(Ok(())).await.ok();
@@ -1035,14 +1133,10 @@ impl Equipo {
             conn.close(VarInt::from_u32(cierre::MARCO), b"");
             return;
         };
-        let grupo = grupo.map(|(g, addrs)| {
-            for a in addrs {
-                if a.id != self.clave() {
-                    self.0.memoria.add_endpoint_info(a);
-                }
-            }
-            g
-        });
+        let (grupo, addrs_grupo) = match grupo {
+            Some((g, a)) => (Some(g), a),
+            None => (None, Vec::new()),
+        };
         if archivos.is_empty() {
             let _ = escribir(&mut tx, &json!({"type": "version"})).await;
             let _ = tokio::time::timeout(Duration::from_secs(5), conn.closed()).await;
@@ -1103,13 +1197,27 @@ impl Equipo {
             let _ = tokio::time::timeout(Duration::from_secs(5), conn.closed()).await;
             return;
         };
+        // Las direcciones del grupo, solo ahora y solo las que no se conocían: se quitan al dejar de compartir.
+        let mut anadidas = Vec::new();
+        for a in addrs_grupo {
+            if a.id != self.clave() && self.0.memoria.get_endpoint_info(a.id).is_none() {
+                anadidas.push(a.id);
+                self.0.memoria.add_endpoint_info(a);
+            }
+        }
         let elegidos: Vec<&Archivo> = indices.iter().map(|&i| &archivos[i]).collect();
         let r = tokio::select! {
             r = self.recibir_aceptada(id, &conn, &mut tx, &mut rx, &indices, &elegidos, &destino, grupo.as_ref(), &cancelar) => r,
             _ = conn.closed() => Err(if conn.close_reason().is_some_and(|r| es_cancelado(&r)) { "cancelado" } else { "red" }),
         };
-        if let Some(g) = &grupo {
-            self.compartir_un_rato(id, g, &elegidos).await;
+        if grupo.is_some() {
+            // Quien cancela deja de servir al grupo en el acto.
+            let rato = if r == Err("cancelado") {
+                Duration::ZERO
+            } else {
+                grupo::COMPARTIR
+            };
+            self.compartir_un_rato(id, &elegidos, rato, anadidas).await;
         }
         if r == Err("cancelado") || cancelar.is_cancelled() {
             for a in &elegidos {
@@ -1163,15 +1271,47 @@ impl Equipo {
         if self.0.exigir_directa {
             self.esperar_directa(conn, cancelar).await?;
         }
-        if let Some(g) = grupo {
-            // Los demás del grupo pueden pedir a este equipo lo que ya tenga de estos archivos.
-            for (k, m) in g.miembros.iter().enumerate() {
-                if k != g.yo {
-                    self.autorizar(*m, id, elegidos.iter().map(|a| a.hash));
+        let Some(g) = grupo else {
+            return self.bajar(id, de, elegidos, destino, None, cancelar).await;
+        };
+        // Los demás del grupo pueden pedir a este equipo su trozo de estos archivos. No lo que ya tenía entero
+        // antes: si no, quien supiera una huella podría sacársela metiéndose en un grupo.
+        let mut compartibles = Vec::new();
+        for a in elegidos {
+            let entero = self
+                .0
+                .store
+                .remote()
+                .local(a.hash)
+                .await
+                .map(|l| l.is_complete())
+                .unwrap_or(true);
+            if !entero && a.tamano >= grupo::MIN_REPARTO {
+                compartibles.push(*a);
+            }
+        }
+        for (k, m) in g.miembros.iter().enumerate() {
+            if k == g.yo {
+                continue;
+            }
+            self.autorizar(*m, id, compartibles.iter().map(|a| a.hash));
+            let mut trozos = self.0.solo_trozo.lock().unwrap();
+            for a in &compartibles {
+                trozos.insert((id, *m, a.hash), g.trozo(g.yo, a.tamano));
+            }
+        }
+        let bajada = self.bajar(id, de, elegidos, destino, grupo, cancelar);
+        tokio::pin!(bajada);
+        let mut reloj = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            tokio::select! {
+                r = &mut bajada => return r,
+                _ = reloj.tick() => {
+                    let b = self.0.progreso.lock().unwrap().get(&id).copied().unwrap_or(0);
+                    let _ = escribir(tx, &json!({"type": "avance", "bytes": b})).await;
                 }
             }
         }
-        self.bajar(id, de, elegidos, destino, grupo, cancelar).await
     }
 
     /// Con el relé de n0 los archivos solo van directos: se espera a que la conexión deje de ir por el relé.
@@ -1194,25 +1334,34 @@ impl Equipo {
         }
     }
 
-    /// Tras terminar, un receptor de un grupo sigue sirviendo a los demás un rato, con los blobs protegidos.
-    async fn compartir_un_rato(&self, id: u64, g: &Grupo, elegidos: &[&Archivo]) {
+    /// Tras terminar, un receptor de un grupo sigue sirviendo a los demás un rato, con los blobs protegidos; después
+    /// revoca los permisos y olvida las direcciones del grupo que añadió.
+    async fn compartir_un_rato(
+        &self,
+        id: u64,
+        elegidos: &[&Archivo],
+        rato: Duration,
+        anadidas: Vec<EndpointId>,
+    ) {
         let mut etiquetas = Vec::new();
-        for a in elegidos {
-            if let Ok(t) = self.0.store.tags().temp_tag(a.hash).await {
-                etiquetas.push(t);
+        if !rato.is_zero() {
+            for a in elegidos {
+                if let Ok(t) = self.0.store.tags().temp_tag(a.hash).await {
+                    etiquetas.push(t);
+                }
             }
         }
         let e = self.clone();
-        let otros = g.miembros.len() > 1;
         tokio::spawn(async move {
-            if otros {
-                tokio::select! {
-                    _ = tokio::time::sleep(grupo::COMPARTIR) => {}
-                    _ = e.0.cerrar.cancelled() => {}
-                }
+            tokio::select! {
+                _ = tokio::time::sleep(rato) => {}
+                _ = e.0.cerrar.cancelled() => {}
             }
             e.revocar(id);
             e.0.servidos.lock().unwrap().remove(&id);
+            for k in anadidas {
+                e.0.memoria.remove_endpoint_info(k);
+            }
             drop(etiquetas);
         });
     }

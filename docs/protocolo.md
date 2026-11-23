@@ -114,13 +114,23 @@ Un billete es `beam1` seguido de base64url del JSON de la `EndpointAddr`, que ll
 
 ## 7. Varios destinos, relé y límite de subida (fase 3)
 
-**Envío a varios.** `ofrecer` con una lista en `a` abre un envío por destino, con los archivos importados una sola vez. Si son dos o más, cada oferta lleva `grupo`: los billetes de todos los destinos, en el mismo orden para todos.
-- El que recibe rechaza la oferta (marco inválido) si `grupo` no tiene de 2 a 8 billetes válidos y distintos, si no está él exactamente una vez o si está el que envía.
-- Cada archivo de 4 MiB o más se parte en tantos trozos como receptores, alineados a bloques de 16 KiB. El receptor `k` baja el trozo `k` del emisor. Para los demás trozos pregunta con `observe` al receptor que le toca: en cuanto lo tiene entero, se lo pide a él, con el emisor como reserva. Si ese receptor se niega (no aceptó), se va o no avanza en 30 s, el trozo se pide al emisor. Al final se pide al emisor lo que falte, que normalmente es nada.
-- Un receptor de un grupo, desde que el emisor manda `listo`, sirve a los demás del grupo las huellas que aceptó (`get` y `observe`), y lo sigue haciendo 2 minutos después de terminar, con los blobs protegidos de la limpieza. A nadie más.
-- Medido en la prueba de 3 receptores con 24 MiB: el emisor sube 1,0 veces el tamaño y los receptores se sirven el resto entre ellos.
+**Envío a varios.** `ofrecer` con una lista en `a` abre un envío por destino, con los archivos importados una sola vez. Cancelar todos los envíos para también la importación. Si son dos o más, cada oferta lleva `grupo`: los billetes de todos los destinos, en el mismo orden para todos.
+- El grupo ocupa **un solo turno** de envío: lo toma el primero que acepta y se suelta al acabar el último.
+- El que recibe rechaza la oferta (marco inválido) si `grupo` no tiene de 2 a 8 billetes válidos y distintos, si no está él exactamente una vez o si está el que envía. Las direcciones del grupo solo se apuntan si acepta, y solo las de equipos que no conocía; se olvidan al dejar de compartir.
+- Cada archivo de 4 MiB o más se parte en tantos trozos como receptores, alineados a bloques de 16 KiB; el último acaba en el último KiB del archivo. El receptor `k` baja el trozo `k` del emisor. Cada uno de los demás trozos se lo pregunta con `observe` al receptor que le toca y, en cuanto lo tiene entero, se lo pide a él. Se pasa al emisor si:
+  - ese receptor se niega (no aceptó) o se va;
+  - no tiene nada en 10 s, por ejemplo porque se saltó el archivo al tenerlo ya;
+  - deja de avanzar 30 s;
+  - sirve más despacio de 512 KiB/s (tope por trozo);
+  - con el relé de n0, no se llega a él directo en 5 s.
 
-**Relé.** Con el relé de n0 (`rele: "n0"`), el que recibe espera hasta 20 s a que la conexión con el emisor vaya por una ruta directa antes de pedir datos. Si no la hay, termina con `sin-directa`, porque por ese relé los archivos iban a 0,04 MiB/s (fase 0). Con un relé propio (URL) los datos pueden ir por él, y `soloRele` obliga a que vayan siempre por él, lo que oculta la IP.
-- shortcut: se mira la ruta de la conexión de la oferta, no la de iroh-blobs; las dos van al mismo equipo por el mismo socket.
+  Al final se pide al emisor lo que falte, que normalmente es nada.
+- **Qué sirve un receptor a los demás:** desde `listo`, solo **su trozo** (`get` con rangos dentro de él y `observe`) de las huellas que aceptó y que no tenía ya enteras antes. Así, quien sepa una huella no puede sacarla metiéndose en un grupo. Lo sigue haciendo 2 minutos después de terminar, con los blobs protegidos de la limpieza; si cancela, deja de servir en el acto.
+- **Avance:** en un grupo, el que recibe le manda al emisor `{"type":"avance","bytes":n}` cada segundo por `beamline/1`. El emisor lo usa para su barra y para la inactividad, porque lo que él sirve directamente es solo un trozo.
+- Medido en la prueba de 3 receptores con 24 MiB: el emisor sube 1,0 veces el tamaño y los receptores se sirven el resto entre ellos. Con 24 MiB + 777 bytes, igual y sin esperas.
 
-**Límite de subida.** Con `limiteSubida`, cada bloque de 16 KiB que sirve este equipo espera su turno en un solo ritmo para todo lo que sirve. Sin límite, ese gancho ni se activa.
+**Relé.** Con el relé de n0 (`rele: "n0"`), el que recibe espera hasta 20 s a que la conexión con el emisor vaya por una ruta directa antes de pedir datos. Si no la hay, termina con `sin-directa` y el emisor ve el mismo código, porque por ese relé los archivos iban a 0,04 MiB/s (fase 0). Con un relé propio (URL https; el esquema puede venir en mayúsculas) los datos pueden ir por él, y `soloRele` obliga a que vayan siempre por él. Eso oculta la IP, y por eso con `soloRele` tampoco se anuncia el equipo por mDNS.
+- shortcut: la ruta se mira al empezar, en la conexión de la oferta y en la de cada par del grupo. Si a mitad la ruta directa se cae, iroh vuelve al relé y no se detecta; tampoco el caso de un emisor que use el relé de n0 frente a un receptor con relé propio.
+
+**Límite de subida.** Con `limiteSubida`, cada bloque de 16 KiB que sirve este equipo espera su turno en un solo ritmo para todo lo que sirve; al cerrar, las esperas se sueltan. Sin límite, ese gancho ni se activa.
+- shortcut: el ritmo es común, sin reparto justo entre pares.

@@ -16,7 +16,7 @@ App de envío de archivos tipo LocalSend que también funciona por internet: iro
 - El contrato está en `docs\protocolo.md`.
 - Entorno: `. build\entorno.ps1`. Por ahora usa el `.entorno` de la copia de trabajo de Sala.
 - Pruebas:
-  - Rust: `cd red; cargo test` (y `--features prueba` para la del relé local). Hay 39: 21 unitarias (`src\equipo\pruebas.rs` y el reparto de `grupo.rs`) y 18 de punta a punta (`tests\transferencias.rs` y `tests\grupo.rs`).
+  - Rust: `cd red; cargo test` (y `--features prueba` para la del relé local). Hay 41: 21 unitarias (`src\equipo\pruebas.rs` y el reparto de `grupo.rs`) y 20 de punta a punta (`tests\transferencias.rs` y `tests\grupo.rs`, que incluye un miembro hostil del grupo).
   - C#: `dotnet test BeamLine.slnx`. Hay 11, y 10 de ellas usan procesos reales.
   - No hay CI porque no hay remoto.
 
@@ -87,7 +87,25 @@ Detalles que conviene saber:
 
    Claude lo probó con el ratón con tres ventanas: envío a dos a la vez, la huella en el diálogo, sin duplicados y la validación de la URL del relé.
 
-   Faltan:
-   - la revisión de bloque, en marcha con Gemini Argon;
-   - medir de verdad entre PC, con un relé propio en un VPS y con el reparto fuera de loopback.
+   La revisión de bloque la hizo Gemini Argon el 23-nov. Sus 9 hallazgos para arreglar ya y 7 de sus mejoras están aplicados (§7 del protocolo):
+   - el avance del grupo llega al emisor;
+   - un turno por grupo;
+   - solo el trozo propio a los demás, y nada de lo que ya se tenía;
+   - pares lentos, con tope;
+   - n0 también entre pares;
+   - `sin-directa` en el emisor;
+   - direcciones solo al aceptar;
+   - cancelar durante la importación;
+   - URL en mayúsculas;
+   - último trozo exacto.
+
+   Quedan como shortcut: la ruta directa que se cae a mitad, el reparto justo del límite y los billetes del grupo sin direcciones para destinos dados solo por clave.
+
+   Decidido con la opción recomendada (Daniel puede cambiarlo):
+   - siguen siendo hasta 8;
+   - cancelar corta lo que se sirve al grupo;
+   - «solo relé» apaga mDNS;
+   - un favorito sirve solo su trozo a los del grupo.
+
+   Falta medir de verdad entre PC, con un relé propio en un VPS y con el reparto fuera de loopback (pregunta E).
 4. Fase 4: Linux con Uno, publicación y la entrada del Lanzador.

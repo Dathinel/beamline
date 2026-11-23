@@ -67,8 +67,8 @@ impl Red {
         let rele = match red["rele"].as_str().unwrap_or("n0") {
             "n0" => Rele::N0,
             "ninguno" => Rele::Ninguno,
-            u if u.starts_with("https://")
-                || (cfg!(feature = "prueba") && u.starts_with("http://")) =>
+            u if u.to_ascii_lowercase().starts_with("https://")
+                || (cfg!(feature = "prueba") && u.to_ascii_lowercase().starts_with("http://")) =>
             {
                 Rele::Url(
                     u.parse()

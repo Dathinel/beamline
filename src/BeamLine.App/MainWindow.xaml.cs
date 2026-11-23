@@ -572,7 +572,7 @@ public sealed partial class MainWindow : Window
         Propio();
         NumberBox limite = new()
         {
-            Header = "Límite de subida en MB/s (0, sin límite)",
+            Header = "Límite de subida en MiB/s (0, sin límite; como mínimo 0,1)",
             Value = _ajustes.LimiteSubidaMBs,
             Minimum = 0,
             Maximum = 10_000,
@@ -607,12 +607,20 @@ public sealed partial class MainWindow : Window
         if (r == ContentDialogResult.Primary)
         {
             string nuevo = rele.SelectedIndex switch { 1 => "ninguno", 2 => url.Text.Trim(), _ => "n0" };
-            if (rele.SelectedIndex == 2 && !Uri.TryCreate(nuevo, UriKind.Absolute, out _) | !EsUrl(nuevo))
+            if (rele.SelectedIndex == 2)
             {
-                Avisar("La dirección del relé tiene que empezar por https://. No se cambió la conexión.", InfoBarSeverity.Warning);
-                nuevo = _ajustes.Rele;
+                if (Uri.TryCreate(nuevo, UriKind.Absolute, out Uri? u) && u.Scheme == Uri.UriSchemeHttps)
+                {
+                    nuevo = u.AbsoluteUri; // esquema y host en minúsculas, como los espera beamline-red
+                }
+                else
+                {
+                    Avisar("La dirección del relé tiene que empezar por https://. No se cambió la conexión.", InfoBarSeverity.Warning);
+                    nuevo = _ajustes.Rele;
+                }
             }
-            double mbs = double.IsNaN(limite.Value) ? 0 : Math.Max(0, limite.Value);
+            // Por debajo de 0,1 MiB/s un bloque de 16 KiB tardaría tanto que el otro lado daría el envío por perdido.
+            double mbs = double.IsNaN(limite.Value) || limite.Value <= 0 ? 0 : Math.Max(0.1, limite.Value);
             await AplicarAjustesAsync(alias.Text.Trim(), carpeta.Text.Trim(), nuevo, soloRele.IsChecked == true, mbs);
         }
         if (_pendientes.Count > 0 && !_hayDialogo) _ = MostrarOfertasAsync(); // ofertas llegadas con Ajustes abierto
