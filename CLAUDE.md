@@ -16,8 +16,8 @@ App de envío de archivos tipo LocalSend que también funciona por internet: iro
 - El contrato está en `docs\protocolo.md`.
 - Entorno: `. build\entorno.ps1`. Por ahora usa el `.entorno` de la copia de trabajo de Sala.
 - Pruebas:
-  - Rust: `cd red; cargo test`. Hay 32: 19 unitarias (`src\equipo\pruebas.rs`: enlaces, temporales, tamaño falso, plazos, cupos, espacio, permisos, carreras, reservas) y 13 de punta a punta.
-  - C#: `dotnet test BeamLine.slnx`. Hay 10, y 9 de ellas usan dos procesos reales.
+  - Rust: `cd red; cargo test` (y `--features prueba` para la del relé local). Hay 39: 21 unitarias (`src\equipo\pruebas.rs` y el reparto de `grupo.rs`) y 18 de punta a punta (`tests\transferencias.rs` y `tests\grupo.rs`).
+  - C#: `dotnet test BeamLine.slnx`. Hay 11, y 10 de ellas usan procesos reales.
   - No hay CI porque no hay remoto.
 
 ## Estado
@@ -79,4 +79,15 @@ Detalles que conviene saber:
    - el mDNS entre dos procesos del mismo PC: falla en un sentido, según cuál se abra primero; la lista se corrige sola al llegar una oferta. Entre dos PC hay que comprobarlo con la medida.
    - arrastrar desde el Explorador: el control de pantalla no puede hacerlo; lo prueba Daniel.
    - el QR del billete, que no tiene sentido sin una app de móvil y se aparca.
-3. Fase 3: varios destinatarios a la vez y relé propio. Por el relé de n0 no se puede pasar archivos.
+3. Fase 3 (23-nov), en código (§7 de `docs\protocolo.md`):
+   - enviar a varios, hasta 8. Cada receptor baja su trozo del emisor y el resto de los otros. Con 3 receptores y 24 MiB, el emisor sube 1,0 veces el tamaño;
+   - con el relé de n0, los archivos solo van por conexión directa; si no la hay, fin `sin-directa` (hallazgo 10);
+   - relé propio, «solo relé» (que exige un relé propio) y límite de subida en Ajustes;
+   - autoprueba AOT con un paso de envío a dos.
+
+   Claude lo probó con el ratón con tres ventanas: envío a dos a la vez, la huella en el diálogo, sin duplicados y la validación de la URL del relé.
+
+   Faltan:
+   - la revisión de bloque, en marcha con Gemini Argon;
+   - medir de verdad entre PC, con un relé propio en un VPS y con el reparto fuera de loopback.
+4. Fase 4: Linux con Uno, publicación y la entrada del Lanzador.
