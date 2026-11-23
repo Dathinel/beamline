@@ -158,6 +158,26 @@ public sealed class PuntaAPuntaTests : IAsyncLifetime
     }
 
     [Fact]
+    public void La_clave_sale_del_billete()
+    {
+        Assert.Equal(_beto.Clave, Beam.ClaveDeBillete(_beto.Billete));
+        Assert.Null(Beam.ClaveDeBillete("beam1nada"));
+        Assert.Null(Beam.ClaveDeBillete(_beto.Clave));
+    }
+
+    [Fact]
+    public async Task Un_manejador_de_fallos_que_lanza_tampoco_para_ni_impide_cerrar()
+    {
+        _beto.OfertaRecibida += _ => throw new InvalidOperationException("fallo de la interfaz");
+        _beto.ManejadorFallo += _ => throw new InvalidOperationException("fallo del aviso");
+        string f = await ArchivoAsync("a.txt");
+        await _ana.OfrecerAsync(_beto.Billete, [new ArchivoAEnviar(f, "a.txt")]);
+        Oferta o = await EsperarAsync<Oferta>(_eventosBeto);
+        await _beto.RechazarAsync(o.Id);
+        Assert.True((await EsperarAsync<Respuesta>(_eventosAna)).Rechazada);
+    }
+
+    [Fact]
     public void No_se_envia_una_unidad_entera() =>
         Assert.Throws<ArgumentException>(() => Beam.DeCarpeta(Path.GetPathRoot(Path.GetTempPath())!));
 

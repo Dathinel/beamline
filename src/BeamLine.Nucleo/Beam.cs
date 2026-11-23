@@ -51,6 +51,7 @@ public sealed class Beam : IAsyncDisposable
         Beam b = new(p);
         try
         {
+            suscribir?.Invoke(b);
             JsonElement r = await b.LlamarAsync("abrir", new JsonObject
             {
                 ["identidad"] = o.Identidad,
@@ -73,7 +74,6 @@ public sealed class Beam : IAsyncDisposable
             await b.DisposeAsync().ConfigureAwait(false);
             throw;
         }
-        suscribir?.Invoke(b);
         b._lectura = Task.Run(b.LeerAsync, CancellationToken.None);
         return b;
     }
@@ -156,7 +156,11 @@ public sealed class Beam : IAsyncDisposable
             {
 #pragma warning disable CA1031 // un manejador de la interfaz que falla no debe parar los eventos de la red
                 try { Despachar(ev); }
-                catch (Exception ex) { ManejadorFallo?.Invoke(ex); }
+                catch (Exception ex)
+                {
+                    try { ManejadorFallo?.Invoke(ex); }
+                    catch (Exception) { /* ni el aviso del fallo puede parar la lectura */ }
+                }
 #pragma warning restore CA1031
             }
         }
@@ -231,16 +235,41 @@ public sealed class Beam : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _fin.CancelAsync().ConfigureAwait(false);
-        if (_lectura is not null)
+        try
         {
-            try { await _lectura.ConfigureAwait(false); } catch (OperationCanceledException) { }
+            await _fin.CancelAsync().ConfigureAwait(false);
+            if (_lectura is not null)
+            {
+                try { await _lectura.ConfigureAwait(false); } catch (OperationCanceledException) { }
+            }
+            try { await LlamarSinTurnoAsync("cerrar", null, default).ConfigureAwait(false); }
+            catch (BeamException) { }
         }
-        try { await LlamarSinTurnoAsync("cerrar", null, default).ConfigureAwait(false); }
-        catch (BeamException) { }
-        await _proceso.DisposeAsync().ConfigureAwait(false);
-        _fin.Dispose();
-        _turno.Dispose();
+        finally
+        {
+            await _proceso.DisposeAsync().ConfigureAwait(false);
+            _fin.Dispose();
+            _turno.Dispose();
+        }
+    }
+
+    /// <summary>La clave del equipo de un billete (docs/protocolo.md §6), o null si el billete no vale.</summary>
+    public static string? ClaveDeBillete(string billete)
+    {
+        string t = (billete ?? "").Trim();
+        if (!t.StartsWith("beam1", StringComparison.Ordinal) || t.Length > 8192) return null;
+        try
+        {
+            string b64 = t[5..].Replace('-', '+').Replace('_', '/');
+            b64 = b64.PadRight(b64.Length + (4 - b64.Length % 4) % 4, '=');
+            using JsonDocument d = JsonDocument.Parse(Convert.FromBase64String(b64));
+            return d.RootElement.TryGetProperty("id", out JsonElement id) && id.ValueKind == JsonValueKind.String
+                && id.GetString() is { Length: 64 } clave && clave.All(Uri.IsHexDigit) ? clave.ToLowerInvariant() : null;
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException)
+        {
+            return null;
+        }
     }
 }
 

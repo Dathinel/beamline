@@ -10,7 +10,12 @@ internal sealed record Arranque(string Datos, string? Perfil, string? Autoprueba
     {
         string? perfil = Valor(args, "--perfil");
         string? autoprueba = Valor(args, "--autoprueba");
-        if (autoprueba is not null) perfil ??= "autoprueba-" + Environment.ProcessId;
+        if (autoprueba is not null)
+        {
+            // Carpeta propia y nueva: la autoprueba la borra al acabar, así que nunca puede ser un perfil de verdad.
+            if (perfil is not null) throw new ArgumentException("--autoprueba no se combina con --perfil.");
+            return new Arranque(Path.Combine(Path.GetTempPath(), "beamline-autoprueba-" + Guid.NewGuid().ToString("N")), "autoprueba", Path.GetFullPath(autoprueba));
+        }
         string raiz = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BeamLine");
         if (perfil is not null)
         {
@@ -18,7 +23,7 @@ internal sealed record Arranque(string Datos, string? Perfil, string? Autoprueba
                 throw new ArgumentException("--perfil no es un nombre de carpeta válido.");
             raiz = Path.Combine(raiz, "perfiles", perfil);
         }
-        return new Arranque(raiz, perfil, autoprueba is null ? null : Path.GetFullPath(autoprueba));
+        return new Arranque(raiz, perfil, null);
     }
 
     private static string? Valor(string[] args, string nombre)

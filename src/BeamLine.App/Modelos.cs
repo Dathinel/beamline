@@ -41,8 +41,8 @@ public sealed partial class Destino(string clave) : Observable
         {
             string donde = Cercano ? "En tu red" : Guardado ? "Guardado" : "";
             if (Confianza) donde += " · guarda sin preguntar";
-            string corta = Clave.Length > 8 ? Clave[..8] : Clave;
-            return corta.Length == 0 ? donde : $"{donde} · {corta}";
+            string huella = Texto.Huella(Clave);
+            return huella.Length == 0 ? donde : $"{donde} · {huella}";
         }
     }
 
@@ -69,6 +69,11 @@ public sealed partial class Transferencia(long id, bool entrante, string titulo,
     public bool Ok { get; set; }
     public int Archivos { get; set; }
     public int Aceptados { get; set; }
+    /// <summary>Dónde se guarda lo recibido (la carpeta de Ajustes al aceptar).</summary>
+    public string? Carpeta { get; set; }
+    internal long BytesAntes { get; set; }
+    internal DateTime CuandoAntes { get; set; }
+    internal double Ritmo { get; set; }
 
     /// <summary>Lo que abre «Mostrar» en el Explorador al terminar de recibir.</summary>
     public string? Mostrar { get => _mostrar; set { Poner(ref _mostrar, value); Avisar(nameof(PuedeMostrar)); } }
@@ -83,6 +88,20 @@ internal static class Texto
         < 1L << 20 => $"{b / 1024.0:0.#} KB",
         < 1L << 30 => $"{b / (double)(1L << 20):0.#} MB",
         _ => $"{b / (double)(1L << 30):0.##} GB",
+    };
+
+    /// <summary>Las cuatro palabras de la clave (Sala), para comparar de viva voz que el equipo es quien dice.</summary>
+    public static string Huella(string clave)
+    {
+        try { return Dathinel.Sala.Huella.Palabras(clave); }
+        catch (Exception ex) when (ex is FormatException or ArgumentException) { return ""; }
+    }
+
+    public static string Duracion(double segundos) => segundos switch
+    {
+        < 60 => $"{Math.Max(1, (int)segundos)} s",
+        < 3600 => $"{(int)(segundos / 60)} min",
+        _ => $"{(int)(segundos / 3600)} h {(int)(segundos % 3600 / 60)} min",
     };
 
     public static string Archivos(int n) => n == 1 ? "1 archivo" : $"{n} archivos";
