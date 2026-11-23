@@ -28,12 +28,7 @@ fn parte_valida(p: &str) -> bool {
 
 /// Ruta final dentro de `destino` sin pisar nada: `nombre`, `nombre (2)`, `nombre (3)`… Crea las carpetas intermedias.
 pub fn ruta_libre(destino: &Path, nombre: &str) -> std::io::Result<PathBuf> {
-    debug_assert!(valido(nombre));
-    let mut ruta = destino.to_path_buf();
-    ruta.extend(nombre.split('/'));
-    if let Some(padre) = ruta.parent() {
-        std::fs::create_dir_all(padre)?;
-    }
+    let ruta = preparar(destino, nombre)?;
     if !ruta.exists() {
         return Ok(ruta);
     }
@@ -48,11 +43,58 @@ pub fn ruta_libre(destino: &Path, nombre: &str) -> std::io::Result<PathBuf> {
         .unwrap_or_default();
     for n in 2.. {
         let otra = ruta.with_file_name(format!("{tallo} ({n}){ext}"));
+        comprobar_enlace(&otra)?;
         if !otra.exists() {
             return Ok(otra);
         }
     }
     unreachable!()
+}
+
+pub fn comprobar_enlace(ruta: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(ruta) {
+        Ok(m) => {
+            let enlace = m.file_type().is_symlink();
+            #[cfg(windows)]
+            let enlace = {
+                use std::os::windows::fs::MetadataExt;
+                enlace || m.file_attributes() & 0x400 != 0
+            };
+            if enlace {
+                return Err(std::io::Error::other("La ruta contiene un enlace."));
+            }
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn preparar(destino: &Path, nombre: &str) -> std::io::Result<PathBuf> {
+    if !valido(nombre) {
+        return Err(std::io::Error::other("Nombre inválido."));
+    }
+    comprobar_enlace(destino)?;
+    std::fs::create_dir_all(destino)?;
+    let base = destino.canonicalize()?;
+    let mut ruta = destino.to_path_buf();
+    let partes: Vec<_> = nombre.split('/').collect();
+    // shortcut: un atacante local aún puede sustituir componentes entre comprobación y escritura (TOCTOU).
+    for (i, parte) in partes.iter().enumerate() {
+        ruta.push(parte);
+        comprobar_enlace(&ruta)?;
+        if i + 1 < partes.len() {
+            match std::fs::create_dir(&ruta) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    if !ruta.parent().unwrap().canonicalize()?.starts_with(base) {
+        return Err(std::io::Error::other("La ruta sale del destino."));
+    }
+    Ok(ruta)
 }
 
 #[cfg(test)]
@@ -112,7 +154,9 @@ mod pruebas {
 
     #[test]
     fn no_pisa() {
-        let d = std::env::temp_dir().join(format!("beamline-nombres-{}", rand::random::<u64>()));
+        let d = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("beamline-nombres-{}", rand::random::<u64>()));
         std::fs::create_dir_all(&d).unwrap();
         let r1 = ruta_libre(&d, "sub/a.txt").unwrap();
         assert_eq!(r1, d.join("sub").join("a.txt"));

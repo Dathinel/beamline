@@ -388,10 +388,10 @@ async fn limites_del_que_recibe() {
     assert_eq!(esperar(&a, &mut va, fin_de(e)).await["error"], "rechazado");
     assert!(!vb.iter().any(|e| e["type"] == "oferta"));
 
-    // Cuatro ofertas pendientes como mucho: la quinta vuelve «ocupado».
+    // Dos ofertas pendientes por par: la tercera vuelve «ocupado».
     aleatorio(&c.0.join("y.bin"), 10);
     let mut ids = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..2 {
         ids.push(
             a.ofrecer(&b.billete(), vec![(c.0.join("y.bin"), "y.bin".into())])
                 .unwrap(),
@@ -634,20 +634,19 @@ async fn cinco_transferencias_a_la_vez_esperan_turno_sin_fallar() {
         )
         .unwrap()
     };
-    // Cuatro pendientes (el tope), las cuatro aceptadas a la vez, y la quinta mientras corren.
+    // Se aceptan antes de ofrecer otra: el cupo de pendientes es dos por par.
+    let mut ids = Vec::new();
     for i in 0..4 {
         envios.push(ofrecer(i));
-    }
-    let mut ids = Vec::new();
-    for _ in 0..4 {
-        ids.push(
-            esperar(&b, &mut vb, tipo("oferta")).await["oferta"]
-                .as_u64()
-                .unwrap(),
-        );
-    }
-    for &id in &ids {
+        let id = esperar(&b, &mut vb, tipo("oferta")).await["oferta"]
+            .as_u64()
+            .unwrap();
         b.responder(id, vec![0], Some(c.0.join("destino"))).unwrap();
+        ids.push(id);
+        esperar(&a, &mut va, |ev| {
+            ev["type"] == "respuesta" && ev["envio"] == envios[i]
+        })
+        .await;
     }
     envios.push(ofrecer(4));
     let id = esperar(&b, &mut vb, tipo("oferta")).await["oferta"]
